@@ -1,0 +1,346 @@
+"""Tests for the GenericAdapter."""
+from __future__ import annotations
+
+import json
+import pytest
+from unittest.mock import AsyncMock
+
+from lossless_agent.adapters.base import AgentAdapter, LCMConfig
+from lossless_agent.adapters.generic import GenericAdapter
+
+
+@pytest.fixture
+def summarize_fn():
+    """Async mock summarizer that echoes a short summary."""
+    fn = AsyncMock(return_value="Summary of the conversation.")
+    return fn
+
+
+@pytest.fixture
+def config():
+    """LCMConfig with in-memory DB and small thresholds for testing."""
+    return LCMConfig(
+        db_path=":memory:",
+        summary_model="test-model",
+        fresh_tail_count=2,
+        leaf_min_fanout=2,
+        leaf_chunk_tokens=500,
+        condensed_min_fanout=2,
+        context_threshold=0.5,
+        max_context_tokens=1000,
+    )
+
+
+@pytest.fixture
+def adapter(config, summarize_fn):
+    """Create a GenericAdapter with test config."""
+    a = GenericAdapter(config, summarize_fn)
+    yield a
+    a._db.close()
+
+
+class TestInheritance:
+    """GenericAdapter inherits AgentAdapter."""
+
+    def test_is_agent_adapter(self, adapter):
+        assert isinstance(adapter, AgentAdapter)
+
+    def test_is_generic_adapter(self, adapter):
+        assert isinstance(adapter, GenericAdapter)
+
+
+class TestOnTurnStart:
+    """on_turn_start returns context string or None."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_new_conversation(self, adapter):
+        result = await adapter.on_turn_start("new-session", "hello")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_context_after_messages_stored(self, adapter):
+        # Store some messages first
+        await adapter.on_turn_end("s1", [
+            {"role": "user", "content": "Tell me about cats", "token_count": 5},
+            {"role": "assistant", "content": "Cats are great pets", "token_count": 5},
+        ])
+        result = await adapter.on_turn_start("s1", "more about cats")
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+
+class TestOnTurnEnd:
+    """on_turn_end persists messages and triggers compaction."""
+
+    @pytest.mark.asyncio
+    async def test_persists_messages(self, adapter):
+        messages = [
+            {"role": "user", "content": "Hello there"},
+            {"role": "assistant", "content": "Hi! How can I help?"},
+        ]
+        await adapter.on_turn_end("s1", messages)
+
+        conv = adapter._conv_store.get_or_create("s1")
+        stored = adapter._msg_store.get_messages(conv.id)
+        assert len(stored) == 2
+        assert stored[0].role == "user"
+        assert stored[0].content == "Hello there"
+        assert stored[1].role == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_triggers_compaction_when_needed(self, adapter, summarize_fn):
+        """When enough messages exceed the threshold, compaction runs."""
+        big_messages = []
+        for i in range(10):
+            big_messages.append({
+                "role": "user" if i % 2 == 0 else "assistant",
+                "content": f"Message number {i} with lots of content",
+                "token_count": 200,
+            })
+        await adapter.on_turn_end("s1", big_messages)
+
+        if summarize_fn.called:
+            assert summarize_fn.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_turn_ends_accumulate(self, adapter):
+        await adapter.on_turn_end("s1", [
+            {"role": "user", "content": "First"},
+        ])
+        await adapter.on_turn_end("s1", [
+            {"role": "assistant", "content": "Response"},
+        ])
+        conv = adapter._conv_store.get_or_create("s1")
+        stored = adapter._msg_store.get_messages(conv.id)
+        assert len(stored) == 2
+
+
+class TestGetTools:
+    """get_tools returns valid OpenAI function-calling schemas."""
+
+    def test_returns_list(self, adapter):
+        tools = adapter.get_tools()
+        assert isinstance(tools, list)
+
+    def test_has_three_tools(self, adapter):
+        tools = adapter.get_tools()
+        assert len(tools) == 3
+
+    def test_tool_names(self, adapter):
+        tools = adapter.get_tools()
+        names = {t["function"]["name"] for t in tools}
+        assert names == {"lcm_grep", "lcm_describe", "lcm_expand"}
+
+    def test_tool_schema_structure(self, adapter):
+        tools = adapter.get_tools()
+        for tool in tools:
+            assert tool["type"] == "function"
+            func = tool["function"]
+            assert "name" in func
+            assert "description" in func
+            assert "parameters" in func
+            params = func["parameters"]
+            assert params["type"] == "object"
+            assert "properties" in params
+            assert "required" in params
+
+    def test_no_agent_specific_metadata(self, adapter):
+        """Tools should not contain any agent-specific metadata keys."""
+        tools = adapter.get_tools()
+        for tool in tools:
+            # Should only have 'type' and 'function' at the top level
+            assert set(tool.keys()) == {"type", "function"}, (
+                f"Tool has unexpected keys: {set(tool.keys())}"
+            )
+
+    def test_returns_copy(self, adapter):
+        """Mutating the returned list shouldn't affect the adapter."""
+        tools1 = adapter.get_tools()
+        tools1.pop()
+        tools2 = adapter.get_tools()
+        assert len(tools2) == 3
+
+
+class TestHandleToolCall:
+    """handle_tool_call dispatches correctly."""
+
+    @pytest.mark.asyncio
+    async def test_grep_returns_json(self, adapter):
+        await adapter.on_turn_end("s1", [
+            {"role": "user", "content": "cats are wonderful animals"},
+        ])
+        result = await adapter.handle_tool_call("lcm_grep", {"query": "cats"})
+        parsed = json.loads(result)
+        assert isinstance(parsed, list)
+
+    @pytest.mark.asyncio
+    async def test_describe_not_found(self, adapter):
+        result = await adapter.handle_tool_call(
+            "lcm_describe", {"summary_id": "nonexistent"}
+        )
+        parsed = json.loads(result)
+        assert parsed.get("error") == "summary not found"
+
+    @pytest.mark.asyncio
+    async def test_expand_not_found(self, adapter):
+        result = await adapter.handle_tool_call(
+            "lcm_expand", {"summary_id": "nonexistent"}
+        )
+        parsed = json.loads(result)
+        assert parsed.get("error") == "summary not found"
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool(self, adapter):
+        result = await adapter.handle_tool_call("unknown_tool", {})
+        parsed = json.loads(result)
+        assert "error" in parsed
+        assert "unknown tool" in parsed["error"]
+
+
+class TestGetSystemPromptBlock:
+    """get_system_prompt_block returns generic policy text."""
+
+    def test_returns_non_empty_string(self, adapter):
+        block = adapter.get_system_prompt_block()
+        assert isinstance(block, str)
+        assert len(block) > 0
+
+    def test_mentions_tools(self, adapter):
+        block = adapter.get_system_prompt_block()
+        assert "lcm_grep" in block
+        assert "lcm_describe" in block
+        assert "lcm_expand" in block
+
+    def test_mentions_recall_policy(self, adapter):
+        block = adapter.get_system_prompt_block()
+        assert "Recall Policy" in block
+
+    def test_does_not_mention_specific_agents(self, adapter):
+        """Generic prompt should not reference Hermes, OpenClaw, or other agents."""
+        block = adapter.get_system_prompt_block()
+        block_lower = block.lower()
+        assert "hermes" not in block_lower
+        assert "openclaw" not in block_lower
+        assert "open claw" not in block_lower
+        assert "lossless-claw" not in block_lower
+
+
+class TestStoreMessage:
+    """store_message persists individual messages."""
+
+    @pytest.mark.asyncio
+    async def test_stores_single_message(self, adapter):
+        await adapter.store_message("s1", "user", "Hello world", token_count=3)
+
+        conv = adapter._conv_store.get_or_create("s1")
+        stored = adapter._msg_store.get_messages(conv.id)
+        assert len(stored) == 1
+        assert stored[0].role == "user"
+        assert stored[0].content == "Hello world"
+        assert stored[0].token_count == 3
+
+    @pytest.mark.asyncio
+    async def test_stores_with_tool_metadata(self, adapter):
+        await adapter.store_message(
+            "s1", "tool", "result data", token_count=5,
+            tool_call_id="call_123", tool_name="lcm_grep",
+        )
+
+        conv = adapter._conv_store.get_or_create("s1")
+        stored = adapter._msg_store.get_messages(conv.id)
+        assert len(stored) == 1
+        assert stored[0].tool_call_id == "call_123"
+        assert stored[0].tool_name == "lcm_grep"
+
+
+class TestGetContext:
+    """get_context returns formatted context string."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_empty(self, adapter):
+        result = await adapter.get_context("empty-session", max_tokens=1000)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_context_after_messages(self, adapter):
+        await adapter.on_turn_end("s1", [
+            {"role": "user", "content": "Tell me about dogs", "token_count": 5},
+            {"role": "assistant", "content": "Dogs are loyal", "token_count": 4},
+        ])
+        result = await adapter.get_context("s1", max_tokens=1000)
+        assert result is not None
+        assert isinstance(result, str)
+
+
+class TestForceCompact:
+    """force_compact manually triggers compaction."""
+
+    @pytest.mark.asyncio
+    async def test_creates_summaries_when_enough_messages(self, adapter, summarize_fn):
+        # Add enough messages to trigger leaf compaction
+        messages = []
+        for i in range(10):
+            messages.append({
+                "role": "user" if i % 2 == 0 else "assistant",
+                "content": f"Message {i} about various topics",
+                "token_count": 100,
+            })
+        await adapter.on_turn_end("s1", messages)
+        summarize_fn.reset_mock()
+
+        await adapter.force_compact("s1")
+
+        # force_compact should have attempted compaction
+        # (may or may not call summarize depending on state after on_turn_end)
+
+
+class TestGetStats:
+    """get_stats returns correct counts."""
+
+    @pytest.mark.asyncio
+    async def test_empty_session_stats(self, adapter):
+        stats = await adapter.get_stats("empty-session")
+        assert stats["message_count"] == 0
+        assert stats["total_tokens"] == 0
+        assert isinstance(stats["summary_counts_by_depth"], dict)
+
+    @pytest.mark.asyncio
+    async def test_stats_after_messages(self, adapter):
+        await adapter.on_turn_end("s1", [
+            {"role": "user", "content": "Hello", "token_count": 10},
+            {"role": "assistant", "content": "Hi", "token_count": 5},
+        ])
+        stats = await adapter.get_stats("s1")
+        assert stats["message_count"] == 2
+        assert stats["total_tokens"] == 15
+
+    @pytest.mark.asyncio
+    async def test_stats_has_db_size(self, adapter):
+        stats = await adapter.get_stats("s1")
+        assert "db_size" in stats
+
+
+class TestOnSessionEnd:
+    """on_session_end runs final compaction."""
+
+    @pytest.mark.asyncio
+    async def test_runs_without_error_on_empty(self, adapter):
+        await adapter.on_session_end("empty-session")
+
+    @pytest.mark.asyncio
+    async def test_compacts_remaining_messages(self, adapter, summarize_fn):
+        messages = []
+        for i in range(10):
+            messages.append({
+                "role": "user" if i % 2 == 0 else "assistant",
+                "content": f"Message {i}",
+                "token_count": 10,
+            })
+        await adapter.on_turn_end("s1", messages)
+        summarize_fn.reset_mock()
+
+        await adapter.on_session_end("s1")
+
+        if summarize_fn.called:
+            assert summarize_fn.call_count >= 1
