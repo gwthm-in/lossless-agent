@@ -19,6 +19,8 @@ dev = [
     "pytest-asyncio",
     "mypy",
     "ruff",
+    "mkdocs",
+    "mkdocs-material",
 ]
 
 [tool.setuptools.packages.find]
