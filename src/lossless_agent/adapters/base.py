@@ -2,23 +2,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from typing import Callable, Awaitable, Dict, List, Optional
 
-from lossless_agent.engine.compaction import CompactionConfig
-from lossless_agent.engine.assembler import AssemblerConfig
-
-
-@dataclass
-class LCMConfig:
-    """Combined configuration for the LCM system."""
-
-    db_path: str = ":memory:"
-    summary_model: str = "default"
-    compaction: CompactionConfig = field(default_factory=CompactionConfig)
-    assembler: AssemblerConfig = field(
-        default_factory=lambda: AssemblerConfig(max_context_tokens=128_000)
-    )
+from lossless_agent.config import LCMConfig  # canonical config
 
 
 class AgentAdapter(ABC):

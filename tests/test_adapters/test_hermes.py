@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock
 
 from lossless_agent.adapters.base import LCMConfig
 from lossless_agent.adapters.hermes import HermesAdapter
-from lossless_agent.engine.compaction import CompactionConfig
-from lossless_agent.engine.assembler import AssemblerConfig
 
 
 @pytest.fixture
@@ -24,17 +22,12 @@ def config():
     return LCMConfig(
         db_path=":memory:",
         summary_model="test-model",
-        compaction=CompactionConfig(
-            fresh_tail_count=2,
-            leaf_min_fanout=2,
-            leaf_chunk_tokens=500,
-            condensed_min_fanout=2,
-            context_threshold=0.5,
-        ),
-        assembler=AssemblerConfig(
-            max_context_tokens=1000,
-            fresh_tail_count=2,
-        ),
+        fresh_tail_count=2,
+        leaf_min_fanout=2,
+        leaf_chunk_tokens=500,
+        condensed_min_fanout=2,
+        context_threshold=0.5,
+        max_context_tokens=1000,
     )
 
 

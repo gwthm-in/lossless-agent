@@ -14,8 +14,8 @@ class TestLCMConfig:
 
     def test_default_values(self):
         cfg = LCMConfig()
-        assert cfg.db_path == ":memory:"
-        assert cfg.summary_model == "default"
+        assert cfg.db_path == "~/.lossless-agent/lcm.db"
+        assert cfg.summary_model == ""
         assert isinstance(cfg.compaction, CompactionConfig)
         assert isinstance(cfg.assembler, AssemblerConfig)
 
@@ -24,13 +24,11 @@ class TestLCMConfig:
         assert cfg.db_path == "/tmp/test.db"
 
     def test_custom_compaction(self):
-        cc = CompactionConfig(fresh_tail_count=4)
-        cfg = LCMConfig(compaction=cc)
+        cfg = LCMConfig(fresh_tail_count=4)
         assert cfg.compaction.fresh_tail_count == 4
 
     def test_custom_assembler(self):
-        ac = AssemblerConfig(max_context_tokens=64_000)
-        cfg = LCMConfig(assembler=ac)
+        cfg = LCMConfig(max_context_tokens=64_000)
         assert cfg.assembler.max_context_tokens == 64_000
 
 
