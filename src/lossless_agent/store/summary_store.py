@@ -169,6 +169,28 @@ class SummaryStore:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def get_compacted_message_ids(self, conversation_id: int) -> List[int]:
+        """Get all message IDs that are already covered by a leaf summary."""
+        rows = self._db.conn.execute(
+            "SELECT DISTINCT sm.message_id "
+            "FROM summary_messages sm "
+            "JOIN summaries s ON sm.summary_id = s.summary_id "
+            "WHERE s.conversation_id = ?",
+            (conversation_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_orphan_ids(self, conversation_id: int, depth: int) -> List[str]:
+        """Get summary IDs at a given depth that are not children of any higher summary."""
+        rows = self._db.conn.execute(
+            "SELECT s.summary_id FROM summaries s "
+            "WHERE s.conversation_id = ? AND s.depth = ? "
+            "AND s.summary_id NOT IN (SELECT child_id FROM summary_parents) "
+            "ORDER BY s.created_at ASC",
+            (conversation_id, depth),
+        ).fetchall()
+        return [r[0] for r in rows]
+
     def search(self, query: str) -> List[Summary]:
         """Full-text search across summary content."""
         rows = self._db.conn.execute(
