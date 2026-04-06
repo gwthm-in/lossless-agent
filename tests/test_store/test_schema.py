@@ -21,15 +21,16 @@ class TestSchemaCreation:
             "summaries",
             "summary_messages",
             "summary_parents",
+            "large_files",
             "messages_fts",
             "summaries_fts",
         }
         # FTS5 creates shadow tables; just check our expected ones are present
         assert expected.issubset(tables), f"Missing tables: {expected - tables}"
 
-    def test_schema_version_is_one(self, db):
+    def test_schema_version_is_two(self, db):
         row = db.conn.execute("SELECT version FROM schema_version").fetchone()
-        assert row[0] == 1
+        assert row[0] == 2
 
     def test_wal_mode_on_file_db(self, db_file):
         mode = db_file.conn.execute("PRAGMA journal_mode").fetchone()[0]

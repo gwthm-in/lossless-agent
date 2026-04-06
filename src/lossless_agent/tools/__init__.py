@@ -9,6 +9,12 @@ from .recall import (
     lcm_expand,
 )
 
+from .expand_query import (
+    ExpandQueryConfig,
+    ExpandQueryResult,
+    ExpansionOrchestrator,
+)
+
 __all__ = [
     "GrepResult",
     "DescribeResult",
@@ -16,4 +22,7 @@ __all__ = [
     "lcm_grep",
     "lcm_describe",
     "lcm_expand",
+    "ExpandQueryConfig",
+    "ExpandQueryResult",
+    "ExpansionOrchestrator",
 ]

@@ -63,6 +63,20 @@ CREATE TABLE IF NOT EXISTS summary_parents (
     PRIMARY KEY (parent_id, child_id)
 );
 
+-- Large file storage (intercepted oversized content)
+CREATE TABLE IF NOT EXISTS large_files (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id     INTEGER REFERENCES conversations(id),
+    message_id          INTEGER REFERENCES messages(id),
+    content             TEXT    NOT NULL DEFAULT '',
+    token_count         INTEGER NOT NULL DEFAULT 0,
+    summary             TEXT    NOT NULL DEFAULT '',
+    summary_token_count INTEGER NOT NULL DEFAULT 0,
+    mime_type           TEXT,
+    file_path           TEXT,
+    created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+);
+
 -- FTS5 virtual tables
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content, content='messages', content_rowid='id'
@@ -118,7 +132,7 @@ class Database:
         self.conn.executescript(_SCHEMA_SQL)
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
-            self.conn.execute("INSERT INTO schema_version (version) VALUES (1)")
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (2)")
             self.conn.commit()
 
     def close(self) -> None:
