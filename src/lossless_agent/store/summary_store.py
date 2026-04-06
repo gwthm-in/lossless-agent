@@ -4,6 +4,7 @@ from __future__ import annotations
 import secrets
 from typing import List, Optional
 
+from .abc import AbstractSummaryStore
 from .database import Database
 from .models import Summary
 
@@ -13,7 +14,7 @@ def _generate_summary_id() -> str:
     return "sum_" + secrets.token_hex(6)
 
 
-class SummaryStore:
+class SummaryStore(AbstractSummaryStore):
     """Manage the summary DAG: leaf summaries over messages, condensed over children."""
 
     def __init__(self, db: Database) -> None:

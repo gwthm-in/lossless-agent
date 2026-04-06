@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .abc import AbstractConversationStore
 from .database import Database
 from .models import Conversation
 
 
-class ConversationStore:
+class ConversationStore(AbstractConversationStore):
     """Manage conversation lifecycle."""
 
     def __init__(self, db: Database) -> None:

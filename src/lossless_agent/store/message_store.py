@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from .abc import AbstractMessageStore
 from .database import Database
 from .models import Message
 
 
-class MessageStore:
+class MessageStore(AbstractMessageStore):
     """Append-only message log per conversation."""
 
     def __init__(self, db: Database) -> None:

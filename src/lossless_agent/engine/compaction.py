@@ -4,8 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Awaitable, List, Optional
 
-from lossless_agent.store.message_store import MessageStore
-from lossless_agent.store.summary_store import SummaryStore
+from lossless_agent.store.abc import AbstractMessageStore, AbstractSummaryStore
 from lossless_agent.store.models import Message, Summary
 
 
@@ -46,8 +45,8 @@ class CompactionEngine:
 
     def __init__(
         self,
-        msg_store: MessageStore,
-        sum_store: SummaryStore,
+        msg_store: AbstractMessageStore,
+        sum_store: AbstractSummaryStore,
         summarize_fn: SummarizeFn,
         config: CompactionConfig | None = None,
     ) -> None:
