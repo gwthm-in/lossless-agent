@@ -90,7 +90,7 @@ class MessageStore(AbstractMessageStore):
             "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
             (conversation_id,),
         ).fetchone()
-        return row[0]
+        return int(row[0])
 
     def total_tokens(self, conversation_id: int) -> int:
         """Sum of token_count for all messages in a conversation."""
@@ -98,7 +98,7 @@ class MessageStore(AbstractMessageStore):
             "SELECT COALESCE(SUM(token_count), 0) FROM messages WHERE conversation_id = ?",
             (conversation_id,),
         ).fetchone()
-        return row[0]
+        return int(row[0])
 
     def tail(self, conversation_id: int, n: int) -> List[Message]:
         """Get the last n messages in a conversation, ordered by seq ascending."""

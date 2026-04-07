@@ -53,7 +53,7 @@ def create_adapter(
             raise ValueError(
                 "simple adapter requires db_path or config with db_path"
             )
-        return SimpleAdapter(resolved_db_path, summarize_fn, config)
+        return SimpleAdapter(resolved_db_path, summarize_fn, config)  # type: ignore[return-value]
     else:
         raise ValueError(
             f"Unknown agent type: {agent_type!r}. "

@@ -132,7 +132,7 @@ class ExpansionOrchestrator:
                     for child in expanded.children:
                         compiled_context.append(
                             f"[Source from {desc.summary_id}] "
-                            f"({child.role}): {child.content}"
+                            f"({child.role}): {child.content}"  # type: ignore[union-attr]
                         )
 
         # Step 4: synthesize answer via expand_fn

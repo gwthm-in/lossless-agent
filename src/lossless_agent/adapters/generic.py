@@ -209,10 +209,10 @@ class GenericAdapter(AgentAdapter):
                 return json.dumps({"error": "summary not found"})
             return json.dumps(asdict(result), default=str)
         elif name == "lcm_expand":
-            result = lcm_expand(self._db, arguments["summary_id"])
-            if result is None:
+            expand_result = lcm_expand(self._db, arguments["summary_id"])
+            if expand_result is None:
                 return json.dumps({"error": "summary not found"})
-            return json.dumps(asdict(result), default=str)
+            return json.dumps(asdict(expand_result), default=str)
         else:
             return json.dumps({"error": f"unknown tool: {name}"})
 

@@ -89,7 +89,7 @@ class LCMConfig:
                     p.strip() for p in raw.split(",") if p.strip()
                 ]
             else:
-                kwargs[field_name] = converter(raw)
+                kwargs[field_name] = converter(raw)  # type: ignore[operator]
         return cls(**kwargs)
 
     @classmethod
