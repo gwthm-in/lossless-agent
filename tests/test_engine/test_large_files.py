@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from lossless_agent.engine.large_files import LargeFileConfig, LargeFileInterceptor
-from lossless_agent.store.database import Database
 
 
 @pytest.fixture

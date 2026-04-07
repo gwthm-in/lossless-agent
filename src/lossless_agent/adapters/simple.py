@@ -6,15 +6,13 @@ operations: ingest, retrieve, compact, search, expand, and close.
 """
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import asdict
-from typing import Callable, Awaitable, Dict, List, Optional
+from typing import Callable, Awaitable, List, Optional
 
 from lossless_agent.config import LCMConfig
 from lossless_agent.store import Database, ConversationStore, MessageStore, SummaryStore
 from lossless_agent.engine import CompactionEngine, ContextAssembler
-from lossless_agent.tools import lcm_grep, lcm_describe, lcm_expand
+from lossless_agent.tools import lcm_grep, lcm_expand
 
 SummarizeFn = Callable[[str], Awaitable[str]]
 

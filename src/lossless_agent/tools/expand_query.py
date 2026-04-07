@@ -1,7 +1,7 @@
 """Sub-agent expansion tool for navigating the DAG and answering questions."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, List, Optional
 
 from lossless_agent.store.database import Database
@@ -11,9 +11,7 @@ from lossless_agent.tools.recall import (
     lcm_grep,
     lcm_describe,
     lcm_expand,
-    GrepResult,
     DescribeResult,
-    ExpandResult,
 )
 
 

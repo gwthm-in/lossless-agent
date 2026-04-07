@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable, Awaitable, Dict, List, Optional
+from typing import List, Optional
 
-from lossless_agent.config import LCMConfig  # canonical config
+from lossless_agent.config import LCMConfig  # noqa: F401 — re-exported
+
 
 
 class AgentAdapter(ABC):

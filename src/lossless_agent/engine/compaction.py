@@ -1,7 +1,7 @@
 """Compaction engine: summarises old messages into a DAG of summaries."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Awaitable, List, Optional
 
 from lossless_agent.store.abc import AbstractMessageStore, AbstractSummaryStore

@@ -102,7 +102,6 @@ async def test_adapter_turn_lifecycle(tmp_path):
     assert context is None
 
     # Add messages across multiple turns
-    context_returned = False
     for turn_num in range(15):
         messages = _make_turn_messages(turn_num)
         await adapter.on_turn_end(session_key, messages)
@@ -110,7 +109,7 @@ async def test_adapter_turn_lifecycle(tmp_path):
         # Check if context is returned on next turn start
         ctx = await adapter.on_turn_start(session_key, f"Turn {turn_num + 1} question")
         if ctx is not None:
-            context_returned = True
+            pass
 
     # After enough turns with aggressive settings, we should get context back
     # (tail messages exist so context assembler returns something)

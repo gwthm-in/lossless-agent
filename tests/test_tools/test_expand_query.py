@@ -168,7 +168,7 @@ class TestExpandFnCalledWithContext:
             sum_store=seeded["ss"],
             expand_fn=expand_fn,
         )
-        result = await orch.expand_query(seeded["conv"].id, "quantum")
+        await orch.expand_query(seeded["conv"].id, "quantum")
         expand_fn.assert_called_once()
         prompt_arg = expand_fn.call_args[0][0]
         # Prompt should contain the query

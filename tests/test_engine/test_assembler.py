@@ -1,13 +1,10 @@
 """Tests for the context assembler."""
 import pytest
 
-from lossless_agent.store.database import Database
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
-from lossless_agent.store.models import Message, Summary
 from lossless_agent.engine.assembler import (
     AssemblerConfig,
-    AssembledContext,
     ContextAssembler,
 )
 

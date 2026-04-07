@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import asdict
-from typing import Callable, Awaitable, Dict, List, Optional
+from typing import Callable, Awaitable, List, Optional
 
 from lossless_agent.adapters.base import AgentAdapter, LCMConfig
 from lossless_agent.store import Database, ConversationStore, MessageStore, SummaryStore

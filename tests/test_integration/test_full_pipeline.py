@@ -6,7 +6,6 @@ incremental compaction, multi-conversation isolation, and data integrity.
 """
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,7 +15,7 @@ from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
 from lossless_agent.engine.compaction import CompactionConfig, CompactionEngine
-from lossless_agent.engine.assembler import AssemblerConfig, AssembledContext, ContextAssembler
+from lossless_agent.engine.assembler import AssemblerConfig, ContextAssembler
 from lossless_agent.tools.recall import lcm_grep, lcm_describe, lcm_expand
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pytest
-from dataclasses import fields
 
 from lossless_agent.adapters.base import AgentAdapter, LCMConfig
 from lossless_agent.engine.compaction import CompactionConfig

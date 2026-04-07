@@ -1,7 +1,7 @@
 """Context assembler: builds a budget-aware context from summaries and messages."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List
 
 from lossless_agent.store.abc import AbstractMessageStore, AbstractSummaryStore

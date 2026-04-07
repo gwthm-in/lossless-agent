@@ -163,7 +163,7 @@ class TestCompactLeaf:
 
     @pytest.mark.asyncio
     async def test_creates_summary(self):
-        msgs = _seed_messages(self.msg_store, self.conv.id, 6)
+        _seed_messages(self.msg_store, self.conv.id, 6)
         result = await self.engine.compact_leaf(self.conv.id)
         assert result is not None
         assert result.kind == "leaf"
@@ -187,7 +187,7 @@ class TestCompactLeaf:
 
     @pytest.mark.asyncio
     async def test_calls_summarize_fn_with_formatted_text(self):
-        msgs = _seed_messages(self.msg_store, self.conv.id, 6)
+        _seed_messages(self.msg_store, self.conv.id, 6)
         await self.engine.compact_leaf(self.conv.id)
         self.mock_fn.assert_called_once()
         call_text = self.mock_fn.call_args[0][0]
@@ -196,7 +196,7 @@ class TestCompactLeaf:
 
     @pytest.mark.asyncio
     async def test_source_token_count_matches(self):
-        msgs = _seed_messages(self.msg_store, self.conv.id, 6, token_count=25)
+        _seed_messages(self.msg_store, self.conv.id, 6, token_count=25)
         result = await self.engine.compact_leaf(self.conv.id)
         # 4 msgs * 25 tokens
         assert result.source_token_count == 100
@@ -254,7 +254,7 @@ class TestCompactCondensed:
             conversation_id=self.conv.id,
             content="existing condensed",
             token_count=5,
-            child_ids=[l.summary_id for l in leaves[:3]],
+            child_ids=[leaf.summary_id for leaf in leaves[:3]],
             earliest_at=msgs[0].created_at,
             latest_at=msgs[2].created_at,
             model="test",

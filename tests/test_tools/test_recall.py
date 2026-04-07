@@ -8,9 +8,6 @@ from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
 from lossless_agent.tools.recall import (
-    GrepResult,
-    DescribeResult,
-    ExpandResult,
     lcm_grep,
     lcm_describe,
     lcm_expand,

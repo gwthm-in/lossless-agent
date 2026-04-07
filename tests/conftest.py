@@ -1,6 +1,4 @@
 """Shared fixtures for store tests."""
-import os
-import tempfile
 
 import pytest
 

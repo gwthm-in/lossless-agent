@@ -1,7 +1,7 @@
 """Adapter factory for lossless-agent."""
 from __future__ import annotations
 
-from typing import Callable, Awaitable, Optional, Union
+from typing import Callable, Awaitable, Optional
 
 from lossless_agent.adapters.base import AgentAdapter, LCMConfig
 
@@ -14,7 +14,7 @@ def create_adapter(
     summarize_fn: Optional[SummarizeFn] = None,
     *,
     db_path: Optional[str] = None,
-) -> Union[AgentAdapter, "SimpleAdapter"]:
+) -> AgentAdapter:
     """Create an adapter instance by agent type name.
 
     Args:
