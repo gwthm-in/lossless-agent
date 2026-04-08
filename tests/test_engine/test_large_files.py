@@ -149,6 +149,6 @@ class TestSchema:
         )
         assert cur.fetchone() is not None
 
-    def test_schema_version_is_two(self, db):
+    def test_schema_version_is_four(self, db):
         row = db.conn.execute("SELECT version FROM schema_version").fetchone()
-        assert row[0] == 3
+        assert row[0] == 4

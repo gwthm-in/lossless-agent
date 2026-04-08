@@ -27,11 +27,22 @@ class MessagePartStore(AbstractMessagePartStore):
             tool_output=row[8],
             tool_status=row[9],
             metadata=row[10],
+            session_id=row[11] if len(row) > 11 else None,
+            tool_error=row[12] if len(row) > 12 else None,
+            tool_title=row[13] if len(row) > 13 else None,
+            patch_old=row[14] if len(row) > 14 else None,
+            patch_new=row[15] if len(row) > 15 else None,
+            file_name=row[16] if len(row) > 16 else None,
+            file_content=row[17] if len(row) > 17 else None,
+            snapshot_hash=row[18] if len(row) > 18 else None,
+            compaction_auto=row[19] if len(row) > 19 else 0,
         )
 
     _SELECT_COLS = (
         "part_id, message_id, part_type, ordinal, text_content, "
-        "tool_call_id, tool_name, tool_input, tool_output, tool_status, metadata"
+        "tool_call_id, tool_name, tool_input, tool_output, tool_status, metadata, "
+        "session_id, tool_error, tool_title, patch_old, patch_new, "
+        "file_name, file_content, snapshot_hash, compaction_auto"
     )
 
     def add(self, part: MessagePart) -> MessagePart:
@@ -40,11 +51,16 @@ class MessagePartStore(AbstractMessagePartStore):
         conn.execute(
             "INSERT INTO message_parts (part_id, message_id, part_type, ordinal, "
             "text_content, tool_call_id, tool_name, tool_input, tool_output, "
-            "tool_status, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "tool_status, metadata, session_id, tool_error, tool_title, "
+            "patch_old, patch_new, file_name, file_content, snapshot_hash, "
+            "compaction_auto) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 part.part_id, part.message_id, part.part_type, part.ordinal,
                 part.text_content, part.tool_call_id, part.tool_name,
                 part.tool_input, part.tool_output, part.tool_status, part.metadata,
+                part.session_id, part.tool_error, part.tool_title,
+                part.patch_old, part.patch_new, part.file_name, part.file_content,
+                part.snapshot_hash, part.compaction_auto,
             ),
         )
         conn.commit()

@@ -33,11 +33,15 @@ class SummaryStore(AbstractSummaryStore):
             latest_at=row[8],
             model=row[9],
             created_at=row[10],
+            file_ids=row[11] if len(row) > 11 else None,
+            descendant_count=row[12] if len(row) > 12 else 0,
+            descendant_token_count=row[13] if len(row) > 13 else 0,
         )
 
     _SELECT_COLS = (
         "summary_id, conversation_id, kind, depth, content, token_count, "
-        "source_token_count, earliest_at, latest_at, model, created_at"
+        "source_token_count, earliest_at, latest_at, model, created_at, "
+        "file_ids, descendant_count, descendant_token_count"
     )
 
     def create_leaf(

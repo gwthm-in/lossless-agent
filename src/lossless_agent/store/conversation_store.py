@@ -22,14 +22,18 @@ class ConversationStore(AbstractConversationStore):
             active=bool(row[3]),
             created_at=row[4],
             updated_at=row[5],
+            session_id=row[6] if len(row) > 6 else None,
+            archived_at=row[7] if len(row) > 7 else None,
+            bootstrapped_at=row[8] if len(row) > 8 else None,
         )
 
     def get_or_create(self, session_key: str, title: str = "") -> Conversation:
         """Return existing conversation for session_key, or create a new one."""
         conn = self._db.conn
         row = conn.execute(
-            "SELECT id, session_key, title, active, created_at, updated_at "
-            "FROM conversations WHERE session_key = ?",
+            "SELECT id, session_key, title, active, created_at, updated_at, "
+            "session_id, archived_at, bootstrapped_at "
+            "FROM conversations WHERE session_key = ? AND active = 1",
             (session_key,),
         ).fetchone()
         if row is not None:
@@ -41,8 +45,9 @@ class ConversationStore(AbstractConversationStore):
         )
         conn.commit()
         row = conn.execute(
-            "SELECT id, session_key, title, active, created_at, updated_at "
-            "FROM conversations WHERE session_key = ?",
+            "SELECT id, session_key, title, active, created_at, updated_at, "
+            "session_id, archived_at, bootstrapped_at "
+            "FROM conversations WHERE session_key = ? AND active = 1",
             (session_key,),
         ).fetchone()
         return self._row_to_conversation(row)
@@ -50,7 +55,8 @@ class ConversationStore(AbstractConversationStore):
     def get_by_id(self, conversation_id: int) -> Optional[Conversation]:
         """Fetch a conversation by its ID."""
         row = self._db.conn.execute(
-            "SELECT id, session_key, title, active, created_at, updated_at "
+            "SELECT id, session_key, title, active, created_at, updated_at, "
+            "session_id, archived_at, bootstrapped_at "
             "FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()

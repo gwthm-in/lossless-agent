@@ -27,9 +27,9 @@ class TestSchemaCreation:
         # FTS5 creates shadow tables; just check our expected ones are present
         assert expected.issubset(tables), f"Missing tables: {expected - tables}"
 
-    def test_schema_version_is_two(self, db):
+    def test_schema_version_is_four(self, db):
         row = db.conn.execute("SELECT version FROM schema_version").fetchone()
-        assert row[0] == 3
+        assert row[0] == 4
 
     def test_wal_mode_on_file_db(self, db_file):
         mode = db_file.conn.execute("PRAGMA journal_mode").fetchone()[0]
@@ -49,7 +49,8 @@ class TestConversationsTable:
         row = db.conn.execute("SELECT * FROM conversations WHERE session_key='sess1'").fetchone()
         assert row is not None
 
-    def test_session_key_unique(self, db):
+    def test_session_key_unique_among_active(self, db):
+        """session_key must be unique among active conversations (partial index)."""
         db.conn.execute(
             "INSERT INTO conversations (session_key, title) VALUES (?, ?)",
             ("sess1", "Test"),

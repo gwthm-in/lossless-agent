@@ -13,6 +13,9 @@ class Conversation:
     active: bool
     created_at: str
     updated_at: str
+    session_id: Optional[str] = None
+    archived_at: Optional[str] = None
+    bootstrapped_at: Optional[str] = None
 
 
 @dataclass
@@ -41,6 +44,9 @@ class Summary:
     latest_at: str
     model: str
     created_at: str
+    file_ids: Optional[str] = None
+    descendant_count: int = 0
+    descendant_token_count: int = 0
 
 
 @dataclass
@@ -67,3 +73,12 @@ class MessagePart:
     tool_output: Optional[str] = None
     tool_status: Optional[str] = None
     metadata: Optional[str] = None
+    session_id: Optional[str] = None
+    tool_error: Optional[str] = None
+    tool_title: Optional[str] = None
+    patch_old: Optional[str] = None
+    patch_new: Optional[str] = None
+    file_name: Optional[str] = None
+    file_content: Optional[str] = None
+    snapshot_hash: Optional[str] = None
+    compaction_auto: int = 0
