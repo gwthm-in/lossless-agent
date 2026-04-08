@@ -170,7 +170,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
 
     elif name == "lcm_expand":
-        result = lcm_expand(_db, summary_id=arguments["summary_id"])
+        result = lcm_expand(_db, summary_id=arguments["summary_id"], is_sub_agent=True)
         if result is None:
             return [types.TextContent(type="text", text=json.dumps({"error": "summary not found"}))]
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]

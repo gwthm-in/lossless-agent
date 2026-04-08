@@ -175,7 +175,7 @@ class TestLcmDescribe:
 
 class TestLcmExpand:
     def test_returns_source_messages_for_leaf(self, seeded):
-        result = lcm_expand(seeded["db"], seeded["leaf"].summary_id)
+        result = lcm_expand(seeded["db"], seeded["leaf"].summary_id, is_sub_agent=True)
         assert result is not None
         assert result.summary_id == seeded["leaf"].summary_id
         assert result.kind == "leaf"
@@ -187,7 +187,7 @@ class TestLcmExpand:
         assert "Tell me about quantum computing basics" in contents
 
     def test_returns_child_summaries_for_condensed(self, seeded):
-        result = lcm_expand(seeded["db"], seeded["condensed"].summary_id)
+        result = lcm_expand(seeded["db"], seeded["condensed"].summary_id, is_sub_agent=True)
         assert result is not None
         assert result.summary_id == seeded["condensed"].summary_id
         assert result.kind == "condensed"
@@ -201,5 +201,5 @@ class TestLcmExpand:
         }
 
     def test_returns_none_for_missing(self, seeded):
-        result = lcm_expand(seeded["db"], "sum_doesnotexist")
+        result = lcm_expand(seeded["db"], "sum_doesnotexist", is_sub_agent=True)
         assert result is None

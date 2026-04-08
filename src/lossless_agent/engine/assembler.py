@@ -80,6 +80,68 @@ class ContextAssembler:
 
         return score
 
+    @staticmethod
+    def _collect_tool_call_ids_from_tail(tail: List[Message]) -> set:
+        """Collect tool_call_ids from assistant messages in the tail."""
+        return {
+            m.tool_call_id
+            for m in tail
+            if m.role == "assistant" and m.tool_call_id
+        }
+
+    @staticmethod
+    def _collect_tool_result_ids(messages: List[Message]) -> set:
+        """Collect tool_call_ids from tool result messages."""
+        return {
+            m.tool_call_id
+            for m in messages
+            if m.role == "tool" and m.tool_call_id
+        }
+
+    @staticmethod
+    def _generate_fallback_tool_call_id(message_id: int, seq: int) -> str:
+        """Generate a fallback tool_call_id for messages missing one."""
+        return f"toolu_lcm_{message_id}_{seq}"
+
+    @staticmethod
+    def _ensure_tool_call_ids(messages: List[Message]) -> List[Message]:
+        """Ensure all assistant tool-call messages have a tool_call_id.
+
+        If an assistant message has a tool_name but no tool_call_id,
+        generate a fallback ID to prevent API crashes.
+        """
+        for m in messages:
+            if m.role == "assistant" and m.tool_name and not m.tool_call_id:
+                m.tool_call_id = ContextAssembler._generate_fallback_tool_call_id(
+                    m.id, m.seq
+                )
+        return messages
+
+    @staticmethod
+    def _filter_orphaned_tool_calls(messages: List[Message]) -> List[Message]:
+        """Filter out non-fresh assistant tool-call messages with no matching result.
+
+        For assistant messages that have tool_call_id references, check if
+        matching tool results exist in the message list. Drop assistant
+        tool-call messages that have no matching tool result.
+        """
+        result_ids = {
+            m.tool_call_id
+            for m in messages
+            if m.role == "tool" and m.tool_call_id
+        }
+
+        filtered: List[Message] = []
+        for m in messages:
+            if (
+                m.role == "assistant"
+                and m.tool_call_id
+                and m.tool_call_id not in result_ids
+            ):
+                continue
+            filtered.append(m)
+        return filtered
+
     def assemble(
         self, conv_id: int, prompt: Optional[str] = None
     ) -> AssembledContext:
@@ -97,27 +159,52 @@ class ContextAssembler:
         # 1. Fresh tail
         tail = self._msg.tail(conv_id, self.cfg.fresh_tail_count)
 
+        # 1a. Ensure all tool calls have IDs (fallback generation)
+        tail = self._ensure_tool_call_ids(tail)
+
         # 1b. Repair tool-call/result pairing if enabled
         if self.cfg.repair_transcripts:
             repairer = TranscriptRepairer()
             tail = repairer.repair(tail)
 
+        # 1c. Fresh tail tool call protection:
+        # Collect tool_call_ids from assistant messages in the tail
+        tail_tool_call_ids = self._collect_tool_call_ids_from_tail(tail)
+
+        # Determine which tool_call_ids already have results in the tail
+        tail_result_ids = self._collect_tool_result_ids(tail)
+        # IDs that need results pulled from prefix
+        missing_result_ids = tail_tool_call_ids - tail_result_ids
+
+        # If there are missing results, scan the evictable prefix
+        protected_from_prefix: List[Message] = []
+        if missing_result_ids:
+            all_messages = self._msg.get_messages(conv_id)
+            tail_ids = {m.id for m in tail}
+            prefix = [m for m in all_messages if m.id not in tail_ids]
+            for m in prefix:
+                if m.role == "tool" and m.tool_call_id in missing_result_ids:
+                    protected_from_prefix.append(m)
+
         tail_tokens = sum(m.token_count for m in tail)
+        protected_tokens = sum(m.token_count for m in protected_from_prefix)
 
         # 2. Summary budget
-        remaining = self.cfg.max_context_tokens - tail_tokens
+        remaining = self.cfg.max_context_tokens - tail_tokens - protected_tokens
         summary_budget = remaining * self.cfg.summary_budget_ratio
 
         if summary_budget <= 0:
+            final_messages = protected_from_prefix + tail
             return AssembledContext(
-                summaries=[], messages=tail, total_tokens=tail_tokens
+                summaries=[],
+                messages=final_messages,
+                total_tokens=tail_tokens + protected_tokens,
             )
 
         # 3. Fetch all summaries
         all_summaries = self._sum.get_by_conversation(conv_id)
 
         # Determine child IDs to skip (from parent-child hierarchy)
-        # First pass: sort by depth DESC to find parents first
         all_summaries.sort(key=lambda s: (-s.depth, s.earliest_at))
         child_ids_of_included: set = set()
         eligible: List[Summary] = []
@@ -143,7 +230,6 @@ class ContextAssembler:
                     reverse=True,
                 )
         else:
-            # Default: depth DESC, earliest_at ASC (already sorted)
             pass
 
         # 4. Fill budget
@@ -156,9 +242,10 @@ class ContextAssembler:
             included.append(s)
             summary_tokens += s.token_count
 
-        total = tail_tokens + summary_tokens
+        final_messages = protected_from_prefix + tail
+        total = tail_tokens + protected_tokens + summary_tokens
         return AssembledContext(
-            summaries=included, messages=tail, total_tokens=total
+            summaries=included, messages=final_messages, total_tokens=total
         )
 
     def format_context(self, assembled: AssembledContext) -> str:

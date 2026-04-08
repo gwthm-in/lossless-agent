@@ -7,6 +7,11 @@ from typing import List
 from lossless_agent.store.models import Message
 
 
+def generate_fallback_tool_call_id(message_id: int, seq: int) -> str:
+    """Generate a fallback tool_call_id for messages missing one."""
+    return f"toolu_lcm_{message_id}_{seq}"
+
+
 class TranscriptRepairer:
     """Repair common tool-call/tool-result ordering and pairing problems.
 
@@ -31,6 +36,12 @@ class TranscriptRepairer:
     def repair(self, messages: List[Message]) -> List[Message]:
         """Return a repaired copy of *messages*."""
         msgs = [deepcopy(m) for m in messages]
+
+        # Step 0: Assign fallback tool_call_ids to assistant messages that have
+        # a tool_name but no tool_call_id (prevents API crashes).
+        for m in msgs:
+            if m.role == "assistant" and m.tool_name and not m.tool_call_id:
+                m.tool_call_id = generate_fallback_tool_call_id(m.id, m.seq)
 
         # Identify tool-call messages (assistant messages with a tool_call_id)
         # and tool-result messages (role='tool' with a tool_call_id).

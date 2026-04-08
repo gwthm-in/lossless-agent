@@ -147,7 +147,7 @@ class SimpleAdapter:
 
         Returns a dict with the expansion result, or an error dict.
         """
-        result = lcm_expand(self._db, summary_id)
+        result = lcm_expand(self._db, summary_id, is_sub_agent=True)
         if result is None:
             return {"error": "summary not found"}
         return asdict(result)

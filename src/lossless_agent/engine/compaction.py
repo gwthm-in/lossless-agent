@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import enum
+import json
 import logging
+import re
 from dataclasses import dataclass, field
+from math import floor
 from typing import Callable, Awaitable, List, Optional
 
 from lossless_agent.store.abc import (
@@ -28,6 +32,14 @@ class SummarizerTimeoutError(Exception):
     """Raised when the summarisation call exceeds the configured timeout."""
 
 
+class CompactionUrgency(enum.Enum):
+    """Urgency level for compaction based on dual-threshold system."""
+    NONE = "none"
+    ASYNC = "async"
+    BLOCKING = "blocking"
+
+
+
 # ------------------------------------------------------------------
 # Config
 # ------------------------------------------------------------------
@@ -42,10 +54,19 @@ class CompactionConfig:
     condensed_min_fanout: int = 3
     condensed_min_fanout_hard: int = 2
     context_threshold: float = 0.75
+    soft_threshold: Optional[float] = None  # tau_soft; defaults to context_threshold
+    hard_threshold: float = 0.85  # tau_hard; blocking compaction above this
     leaf_target_tokens: int = 1200
     condensed_target_tokens: int = 2000
+    condensed_min_input_ratio: float = 0.1
     summary_max_overage_factor: float = 3.0
     summary_timeout_ms: int = 60_000
+    custom_instructions: str = ""
+
+    @property
+    def effective_soft_threshold(self) -> float:
+        """Return soft threshold, falling back to context_threshold."""
+        return self.soft_threshold if self.soft_threshold is not None else self.context_threshold
 
 
 SummarizeFn = Callable[[str], Awaitable[str]]
@@ -296,9 +317,22 @@ class CompactionEngine:
     # ------------------------------------------------------------------
 
     def needs_compaction(self, conv_id: int, context_limit: int) -> bool:
-        """Return True when total conversation tokens exceed the threshold."""
+        """Return True when total conversation tokens exceed the soft threshold."""
+        return self.compaction_urgency(conv_id, context_limit) is not CompactionUrgency.NONE
+
+    def compaction_urgency(self, conv_id: int, context_limit: int) -> CompactionUrgency:
+        """Return how urgently compaction is needed (dual-threshold)."""
+        if context_limit <= 0:
+            return CompactionUrgency.NONE
         total = self._msg.total_tokens(conv_id)
-        return total > self.cfg.context_threshold * context_limit
+        ratio = total / context_limit
+        soft = self.cfg.effective_soft_threshold
+        hard = self.cfg.hard_threshold
+        if ratio >= hard:
+            return CompactionUrgency.BLOCKING
+        if ratio >= soft:
+            return CompactionUrgency.ASYNC
+        return CompactionUrgency.NONE
 
     # ------------------------------------------------------------------
     # Leaf compaction
@@ -400,11 +434,21 @@ class CompactionEngine:
     async def run_incremental(
         self, conv_id: int, context_limit: int
     ) -> List[Summary]:
-        """Run one incremental compaction cycle (leaf then condensed)."""
-        created: List[Summary] = []
+        """Run one incremental compaction cycle (leaf then condensed).
 
-        if not self.needs_compaction(conv_id, context_limit):
-            return created
+        Respects dual-threshold urgency:
+        - NONE  -> skip
+        - ASYNC -> single pass (leaf + condensed)
+        - BLOCKING -> compact_until_under for aggressive compaction
+        """
+        urgency = self.compaction_urgency(conv_id, context_limit)
+        if urgency is CompactionUrgency.NONE:
+            return []
+
+        if urgency is CompactionUrgency.BLOCKING:
+            return await self.compact_until_under(conv_id, context_limit)
+
+        created: List[Summary] = []
 
         # Circuit breaker guard
         if self._cb is not None:

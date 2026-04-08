@@ -68,6 +68,25 @@ class ExpandResult:
     children: List[Union[Message, Summary]]
 
 
+class SubAgentRestrictionError(Exception):
+    """Raised when lcm_expand is called from a non-sub-agent session."""
+
+
+@dataclass
+class GrepResultGroup:
+    """A group of grep results covered by the same summary node."""
+    summary_id: Optional[str]
+    summary_content_preview: str
+    matches: List[GrepResult]
+
+
+@dataclass
+class GroupedGrepResult:
+    """Grep results grouped by covering summary node."""
+    groups: List[GrepResultGroup]
+    ungrouped: List[GrepResult]
+
+
 def _truncate(text: str, max_len: int = 200) -> str:
     if len(text) <= max_len:
         return text
@@ -352,7 +371,9 @@ def lcm_grep(
     mode: str = "full_text",
     since: Optional[str] = None,
     before: Optional[str] = None,
-) -> List[GrepResult]:
+    offset: int = 0,
+    grouped: bool = False,
+) -> Union[List[GrepResult], GroupedGrepResult]:
     """Search messages and/or summaries via FTS5.
 
     CJK queries are automatically routed to the trigram FTS table for
@@ -381,8 +402,62 @@ def lcm_grep(
     if scope in ("all", "summaries"):
         results.extend(_fts_search_summaries(db, query, conversation_id, limit, since=since, before=before))
 
-    # Global limit when scope='all'
-    return results[:limit]
+    # Apply offset then limit
+    if offset > 0:
+        results = results[offset:]
+    results = results[:limit]
+
+    if not grouped:
+        return results
+
+    # Group results by covering summary node
+    return _group_results_by_summary(db, results)
+
+
+def _group_results_by_summary(
+    db: Database, results: List[GrepResult],
+) -> GroupedGrepResult:
+    """Group grep results by their covering summary node."""
+    from collections import OrderedDict
+
+    groups: OrderedDict[Optional[str], List[GrepResult]] = OrderedDict()
+    ungrouped: List[GrepResult] = []
+
+    for r in results:
+        if r.type == "message":
+            # Find the leaf summary covering this message
+            row = db.conn.execute(
+                "SELECT sm.summary_id FROM summary_messages sm "
+                "WHERE sm.message_id = ? LIMIT 1",
+                (r.id,),
+            ).fetchone()
+            if row:
+                sid = row[0]
+                groups.setdefault(sid, []).append(r)
+            else:
+                ungrouped.append(r)
+        elif r.type == "summary":
+            groups.setdefault(str(r.id), []).append(r)
+        else:
+            ungrouped.append(r)
+
+    result_groups = []
+    for sid, matches in groups.items():
+        # Get summary content preview
+        preview = ""
+        if sid:
+            srow = db.conn.execute(
+                "SELECT content FROM summaries WHERE summary_id = ?", (sid,),
+            ).fetchone()
+            if srow:
+                preview = _truncate(srow[0], 100)
+        result_groups.append(GrepResultGroup(
+            summary_id=sid,
+            summary_content_preview=preview,
+            matches=matches,
+        ))
+
+    return GroupedGrepResult(groups=result_groups, ungrouped=ungrouped)
 
 
 def lcm_describe(db: Database, summary_id: str) -> Optional[DescribeResult]:
@@ -430,7 +505,23 @@ def lcm_describe(db: Database, summary_id: str) -> Optional[DescribeResult]:
     )
 
 
-def lcm_expand(db: Database, summary_id: str) -> Optional[ExpandResult]:
+def lcm_expand(
+    db: Database, summary_id: str, is_sub_agent: bool = False,
+) -> Optional[ExpandResult]:
+    """Expand a summary to its constituent children.
+
+    By default restricted to sub-agent sessions only (per LCM whitepaper).
+    Set is_sub_agent=True to allow expansion.
+    """
+    if not is_sub_agent:
+        raise SubAgentRestrictionError(
+            "lcm_expand is restricted to sub-agent sessions. "
+            "Use lcm_expand_query to delegate expansion."
+        )
+    return _lcm_expand_impl(db, summary_id)
+
+
+def _lcm_expand_impl(db: Database, summary_id: str) -> Optional[ExpandResult]:
     """Expand a summary: return source messages (leaf) or child summaries (condensed)."""
     row = db.conn.execute(
         "SELECT summary_id, kind FROM summaries WHERE summary_id = ?",

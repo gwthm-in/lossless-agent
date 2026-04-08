@@ -179,7 +179,7 @@ class ExpansionOrchestrator:
                 break
             if desc.kind == "leaf":
                 steps += 1
-                expanded = lcm_expand(self.db, desc.summary_id)
+                expanded = lcm_expand(self.db, desc.summary_id, is_sub_agent=True)
                 if expanded is not None:
                     for child in expanded.children:
                         compiled_context.append(

@@ -269,13 +269,13 @@ async def test_recall_tools_after_compaction(tmp_path):
     assert len(cond_desc.child_ids) >= config.condensed_min_fanout
 
     # lcm_expand: leaf -> source messages
-    leaf_expand = lcm_expand(db, leaves[0].summary_id)
+    leaf_expand = lcm_expand(db, leaves[0].summary_id, is_sub_agent=True)
     assert leaf_expand is not None
     assert leaf_expand.kind == "leaf"
     assert len(leaf_expand.children) >= config.leaf_min_fanout
 
     # lcm_expand: condensed -> child summaries
-    cond_expand = lcm_expand(db, condensed.summary_id)
+    cond_expand = lcm_expand(db, condensed.summary_id, is_sub_agent=True)
     assert cond_expand is not None
     assert cond_expand.kind == "condensed"
     assert len(cond_expand.children) >= config.condensed_min_fanout
@@ -479,7 +479,7 @@ async def test_nothing_lost(tmp_path):
     # Verify: every leaf summary's source messages are recoverable
     recovered_msg_ids = set()
     for leaf in leaf_summaries:
-        expand_result = lcm_expand(db, leaf.summary_id)
+        expand_result = lcm_expand(db, leaf.summary_id, is_sub_agent=True)
         assert expand_result is not None
         assert expand_result.kind == "leaf"
         for child in expand_result.children:
@@ -489,7 +489,7 @@ async def test_nothing_lost(tmp_path):
 
     # Verify: every condensed summary's children are present
     for cond in condensed_summaries:
-        expand_result = lcm_expand(db, cond.summary_id)
+        expand_result = lcm_expand(db, cond.summary_id, is_sub_agent=True)
         assert expand_result is not None
         assert expand_result.kind == "condensed"
         assert len(expand_result.children) >= config.condensed_min_fanout

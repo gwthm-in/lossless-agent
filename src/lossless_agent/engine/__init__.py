@@ -17,6 +17,7 @@ from .expansion_auth import (
     ExhaustedBudgetError,
 )
 from .expansion_policy import ExpansionPolicy, PolicyAction, PolicyDecision
+from .delegation_guard import DelegationGuard
 from .fts_safety import FTSSafety
 from .heartbeat import HeartbeatPruner
 from .integrity import IntegrityChecker, CheckResult
@@ -24,6 +25,7 @@ from .large_files import LargeFileInterceptor, LargeFileConfig
 from .media import MediaAnnotator
 from .session_patterns import SessionPatternMatcher
 from .startup_banner import StartupBanner
+from .structured_text import StructuredTextExtractor
 from .system_prompt import CompactionAwarePrompt
 from .transcript_repair import TranscriptRepairer
 
@@ -37,6 +39,7 @@ __all__ = [
     "CompactionConfig",
     "CompactionEngine",
     "ContextAssembler",
+    "DelegationGuard",
     "ExhaustedBudgetError",
     "ExpansionAuthManager",
     "ExpansionPolicy",
@@ -54,6 +57,7 @@ __all__ = [
     "SessionBootstrap",
     "SessionPatternMatcher",
     "StartupBanner",
+    "StructuredTextExtractor",
     "SummarizerTimeoutError",
     "TranscriptRepairer",
     "summarize_with_escalation",
