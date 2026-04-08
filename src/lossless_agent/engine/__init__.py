@@ -9,6 +9,7 @@ from .compaction import (
     summarize_with_escalation,
 )
 from .circuit_breaker import CircuitBreaker
+from .transcript_repair import TranscriptRepairer
 
 __all__ = [
     "AssemblerConfig",
@@ -19,5 +20,6 @@ __all__ = [
     "CircuitBreaker",
     "LcmProviderAuthError",
     "SummarizerTimeoutError",
+    "TranscriptRepairer",
     "summarize_with_escalation",
 ]

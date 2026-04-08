@@ -1,11 +1,40 @@
 """Recall tools for searching and navigating the memory DAG."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
+from lossless_agent.engine.fts_safety import FTSSafety
 from lossless_agent.store.database import Database
 from lossless_agent.store.models import Message, Summary
+
+
+# ── CJK detection & FTS5 safety (delegated to FTSSafety) ──────────
+
+
+def _contains_cjk(text: str) -> bool:
+    """Return True if *text* contains any CJK characters."""
+    return FTSSafety.detect_cjk(text)
+
+
+def _sanitize_fts5_query(query: str) -> str:
+    """Strip FTS5 special syntax characters to prevent query errors.
+
+    Delegates to FTSSafety.sanitize_query, then strips remaining FTS5
+    metacharacters for extra safety in the recall context.
+    """
+    if not query:
+        return query
+    sanitized = FTSSafety.sanitize_query(query)
+    # Extra: strip remaining FTS5 metacharacters
+    sanitized = re.sub(r'["\*\(\)\-\+\^:]', " ", sanitized)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    # Remove FTS5 boolean keywords at word boundaries
+    sanitized = re.sub(r"\bNOT\b", "", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\bOR\b", "", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\bAND\b", "", sanitized, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", sanitized).strip()
 
 
 @dataclass
@@ -44,30 +73,27 @@ def _truncate(text: str, max_len: int = 200) -> str:
     return text[: max_len - 3] + "..."
 
 
-def lcm_grep(
+def _like_search(
     db: Database,
+    table: str,
     query: str,
-    scope: str = "all",
-    conversation_id: Optional[int] = None,
-    limit: int = 20,
+    conversation_id: Optional[int],
+    limit: int,
+    result_type: str,
 ) -> List[GrepResult]:
-    """Search messages and/or summaries via FTS5."""
+    """Generic LIKE fallback search for messages or summaries."""
     results: List[GrepResult] = []
-
-    if scope in ("all", "messages"):
+    if table == "messages":
         sql = (
-            "SELECT m.id, m.conversation_id, m.content, m.role, m.seq "
-            "FROM messages m "
-            "JOIN messages_fts f ON m.id = f.rowid "
-            "WHERE messages_fts MATCH ?"
+            "SELECT id, conversation_id, content, role, seq "
+            "FROM messages WHERE content LIKE ?"
         )
-        params: list = [query]
+        params: list = [f"%{query}%"]
         if conversation_id is not None:
-            sql += " AND m.conversation_id = ?"
+            sql += " AND conversation_id = ?"
             params.append(conversation_id)
-        sql += " ORDER BY f.rank LIMIT ?"
+        sql += " LIMIT ?"
         params.append(limit)
-
         for row in db.conn.execute(sql, params).fetchall():
             results.append(
                 GrepResult(
@@ -78,19 +104,111 @@ def lcm_grep(
                     metadata={"role": row[3], "seq": row[4]},
                 )
             )
-
-    if scope in ("all", "summaries"):
+    else:
         sql = (
-            "SELECT s.summary_id, s.conversation_id, s.content, s.kind, s.depth "
-            "FROM summaries s "
-            "JOIN summaries_fts f ON s.rowid = f.rowid "
-            "WHERE summaries_fts MATCH ?"
+            "SELECT summary_id, conversation_id, content, kind, depth "
+            "FROM summaries WHERE content LIKE ?"
         )
-        params = [query]
+        params = [f"%{query}%"]
+        if conversation_id is not None:
+            sql += " AND conversation_id = ?"
+            params.append(conversation_id)
+        sql += " LIMIT ?"
+        params.append(limit)
+        for row in db.conn.execute(sql, params).fetchall():
+            results.append(
+                GrepResult(
+                    type="summary",
+                    id=row[0],
+                    content_snippet=_truncate(row[2]),
+                    conversation_id=row[1],
+                    metadata={"kind": row[3], "depth": row[4]},
+                )
+            )
+    return results
+
+
+def _fts_search_messages(
+    db: Database,
+    query: str,
+    conversation_id: Optional[int],
+    limit: int,
+) -> List[GrepResult]:
+    """Search messages via FTS5 with LIKE fallback."""
+    # CJK: default FTS5 tokenizer can't handle CJK, use LIKE directly
+    if _contains_cjk(query):
+        return _like_search(db, "messages", query, conversation_id, limit, "message")
+
+    safe_query = _sanitize_fts5_query(query)
+    if not safe_query:
+        return _like_search(db, "messages", query, conversation_id, limit, "message")
+
+    try:
+        sql = (
+            "SELECT m.id, m.conversation_id, m.content, m.role, m.seq "
+            "FROM messages m "
+            "JOIN messages_fts f ON m.id = f.rowid "
+            "WHERE messages_fts MATCH ?"
+        )
+        params: list = [safe_query]
+        if conversation_id is not None:
+            sql += " AND m.conversation_id = ?"
+            params.append(conversation_id)
+        sql += " ORDER BY f.rank LIMIT ?"
+        params.append(limit)
+
+        results: List[GrepResult] = []
+        for row in db.conn.execute(sql, params).fetchall():
+            results.append(
+                GrepResult(
+                    type="message",
+                    id=row[0],
+                    content_snippet=_truncate(row[2]),
+                    conversation_id=row[1],
+                    metadata={"role": row[3], "seq": row[4]},
+                )
+            )
+        return results
+    except Exception:
+        return _like_search(db, "messages", query, conversation_id, limit, "message")
+
+
+def _fts_search_summaries(
+    db: Database,
+    query: str,
+    conversation_id: Optional[int],
+    limit: int,
+) -> List[GrepResult]:
+    """Search summaries via FTS5, routing CJK to trigram table with LIKE fallback."""
+    is_cjk = _contains_cjk(query)
+    results: List[GrepResult] = []
+
+    try:
+        if is_cjk:
+            # Use trigram CJK FTS table
+            sql = (
+                "SELECT s.summary_id, s.conversation_id, s.content, s.kind, s.depth "
+                "FROM summaries s "
+                "JOIN summaries_fts_cjk fc ON s.summary_id = fc.summary_id "
+                "WHERE summaries_fts_cjk MATCH ?"
+            )
+            params: list = [query]
+        else:
+            safe_query = _sanitize_fts5_query(query)
+            if not safe_query:
+                return results
+            sql = (
+                "SELECT s.summary_id, s.conversation_id, s.content, s.kind, s.depth "
+                "FROM summaries s "
+                "JOIN summaries_fts f ON s.rowid = f.rowid "
+                "WHERE summaries_fts MATCH ?"
+            )
+            params = [safe_query]
+
         if conversation_id is not None:
             sql += " AND s.conversation_id = ?"
             params.append(conversation_id)
-        sql += " ORDER BY f.rank LIMIT ?"
+        sql += " LIMIT ?"
         params.append(limit)
 
         for row in db.conn.execute(sql, params).fetchall():
@@ -103,6 +221,43 @@ def lcm_grep(
                     metadata={"kind": row[3], "depth": row[4]},
                 )
             )
+        # If CJK FTS returned nothing (e.g. query too short for trigrams),
+        # fall through to LIKE
+        if results or not is_cjk:
+            return results
+    except Exception:
+        pass  # fall through to LIKE
+
+    # LIKE fallback
+    return _like_search(db, "summaries", query, conversation_id, limit, "summary")
+
+
+def lcm_grep(
+    db: Database,
+    query: str,
+    scope: str = "all",
+    conversation_id: Optional[int] = None,
+    limit: int = 20,
+) -> List[GrepResult]:
+    """Search messages and/or summaries via FTS5.
+
+    CJK queries are automatically routed to the trigram FTS table for
+    summaries. All FTS5 queries are sanitized. If FTS5 fails, falls
+    back to LIKE search.
+    """
+    results: List[GrepResult] = []
+
+    is_cjk = _contains_cjk(query)
+
+    if scope in ("all", "messages"):
+        if is_cjk:
+            # CJK: use LIKE directly for messages (default tokenizer can't handle CJK)
+            results.extend(_fts_search_messages(db, query, conversation_id, limit))
+        else:
+            results.extend(_fts_search_messages(db, query, conversation_id, limit))
+
+    if scope in ("all", "summaries"):
+        results.extend(_fts_search_summaries(db, query, conversation_id, limit))
 
     # Global limit when scope='all'
     return results[:limit]
