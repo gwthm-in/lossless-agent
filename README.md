@@ -161,18 +161,37 @@ pytest --cov=lossless_agent --cov-report=term-missing
 All commits follow [Chris Beams' rules](https://cbea.ms/git-commit/) with
 [Conventional Commits](https://www.conventionalcommits.org/) prefixes.
 
+## Features
+
+- **SQLite store** with FTS5 full-text search (messages, summaries, DAG edges)
+- **Leaf compaction engine** — chunk selection + LLM summarization
+- **Condensed compaction** — hierarchical DAG construction at arbitrary depth
+- **Context assembler** — budget-aware summary + raw message assembly
+- **Recall tools**: `lcm_grep`, `lcm_describe`, `lcm_expand`
+- **Adapter system**: Hermes, OpenClaw, Generic, and SimpleAdapter
+- **Incremental compaction** — per-turn, automatic
+- **Sub-agent expansion** (`lcm_expand_query`) for deep retrieval
+- **Large file interception** and separate storage
+- **Configuration system** — env vars (`LCM_*`) + programmatic config
+- **Compaction-aware prompts** — dynamic uncertainty checklist when heavily compacted
+- **Circuit breaker** — automatic backoff on repeated summarization failures
+- **Heartbeat pruning** — removes noisy heartbeat messages
+- **Session pattern matching** — ignore or mark sessions as stateless
+- **MCP server** — Model Context Protocol server for tool-based integrations
+- **py.typed** — PEP 561 compatible, full type annotations
+
 ## Roadmap
 
-- [ ] SQLite store with FTS5 (messages, summaries, DAG edges)
-- [ ] Leaf compaction engine (chunk selection + LLM summarization)
-- [ ] Condensed compaction (hierarchical DAG construction)
-- [ ] Context assembler (budget-aware summary + raw message assembly)
-- [ ] Recall tools: `lcm_grep`, `lcm_describe`, `lcm_expand`
-- [ ] Hermes Memory Provider adapter
-- [ ] Incremental compaction (per-turn, background)
-- [ ] Sub-agent expansion (`lcm_expand_query`)
-- [ ] Large file interception and separate storage
-- [ ] Configuration system (env vars + plugin config)
+- [x] SQLite store with FTS5 (messages, summaries, DAG edges)
+- [x] Leaf compaction engine (chunk selection + LLM summarization)
+- [x] Condensed compaction (hierarchical DAG construction)
+- [x] Context assembler (budget-aware summary + raw message assembly)
+- [x] Recall tools: `lcm_grep`, `lcm_describe`, `lcm_expand`
+- [x] Hermes Memory Provider adapter
+- [x] Incremental compaction (per-turn, background)
+- [x] Sub-agent expansion (`lcm_expand_query`)
+- [x] Large file interception and separate storage
+- [x] Configuration system (env vars + plugin config)
 
 ## Contributing
 

@@ -6,6 +6,7 @@ operations: ingest, retrieve, compact, search, expand, and close.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 from typing import Callable, Awaitable, List, Optional
 
@@ -36,6 +37,7 @@ class SimpleAdapter:
         summarize_fn: SummarizeFn,
         config: Optional[LCMConfig] = None,
     ) -> None:
+        db_path = os.path.expanduser(db_path)
         if config is None:
             config = LCMConfig(db_path=db_path)
         else:

@@ -23,6 +23,9 @@ dev = [
     "mkdocs-material",
 ]
 
+[project.scripts]
+lossless-agent-mcp = "lossless_agent.mcp_server:cli"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

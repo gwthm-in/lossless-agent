@@ -101,6 +101,9 @@ class BaseAdapter(AgentAdapter):
         # --- Compaction-aware prompt ---
         self._compaction_prompt = CompactionAwarePrompt()
 
+        # --- Track last session key for dynamic prompt generation ---
+        self._last_session_key: Optional[str] = None
+
         # --- Track first-turn for startup banner ---
         self._banner_emitted = False
 
@@ -112,6 +115,8 @@ class BaseAdapter(AgentAdapter):
         self, session_key: str, user_message: str
     ) -> Optional[str]:
         """Get or create conversation, assemble context, return formatted string."""
+        self._last_session_key = session_key
+
         # a. Check ignored sessions
         if self._session_matcher.is_ignored(session_key):
             return None
@@ -222,6 +227,18 @@ class BaseAdapter(AgentAdapter):
         """Return the Lossless Recall Policy text.
 
         Includes dynamic compaction-aware additions when heavy
-        compaction is detected.
+        compaction is detected for the current session.
         """
-        return _SYSTEM_PROMPT_BLOCK
+        base = _SYSTEM_PROMPT_BLOCK
+
+        if self._last_session_key is not None:
+            try:
+                conv = self._conv_store.get_or_create(self._last_session_key)
+                summaries = self._sum_store.get_by_conversation(conv.id)
+                addition = self._compaction_prompt.generate(summaries)
+                if addition is not None:
+                    base = base + "\n\n" + addition
+            except Exception:
+                logger.debug("Could not generate compaction-aware prompt", exc_info=True)
+
+        return base
