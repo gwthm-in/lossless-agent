@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "lossless-agent": {
+      "command": "/opt/homebrew/bin/python3.11",
+      "args": [
+        "-m",
+        "lossless_agent.mcp_server",
+        "--db-path",
+        "./data/lcm.db"
+      ],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    }
+  }
+}

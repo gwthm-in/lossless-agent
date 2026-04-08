@@ -151,4 +151,4 @@ class TestSchema:
 
     def test_schema_version_is_two(self, db):
         row = db.conn.execute("SELECT version FROM schema_version").fetchone()
-        assert row[0] == 2
+        assert row[0] == 3

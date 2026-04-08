@@ -29,7 +29,7 @@ class TestSchemaCreation:
 
     def test_schema_version_is_two(self, db):
         row = db.conn.execute("SELECT version FROM schema_version").fetchone()
-        assert row[0] == 2
+        assert row[0] == 3
 
     def test_wal_mode_on_file_db(self, db_file):
         mode = db_file.conn.execute("PRAGMA journal_mode").fetchone()[0]

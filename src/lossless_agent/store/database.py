@@ -111,6 +111,37 @@ CREATE TRIGGER IF NOT EXISTS summaries_au AFTER UPDATE ON summaries BEGIN
     INSERT INTO summaries_fts(summaries_fts, rowid, content) VALUES('delete', old.rowid, old.content);
     INSERT INTO summaries_fts(rowid, content) VALUES (new.rowid, new.content);
 END;
+
+-- Context items: ordered context window tracking
+CREATE TABLE IF NOT EXISTS context_items (
+    conversation_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    item_type TEXT NOT NULL CHECK(item_type IN ('message', 'summary')),
+    message_id TEXT,
+    summary_id TEXT,
+    PRIMARY KEY (conversation_id, ordinal),
+    CHECK ((item_type='message' AND message_id IS NOT NULL AND summary_id IS NULL) OR
+           (item_type='summary' AND summary_id IS NOT NULL AND message_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS context_items_conv_idx ON context_items(conversation_id);
+
+-- Message parts: structured storage for multi-part messages
+CREATE TABLE IF NOT EXISTS message_parts (
+    part_id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    part_type TEXT NOT NULL CHECK(part_type IN ('text', 'tool_call', 'tool_result', 'reasoning', 'file', 'patch', 'snapshot', 'image', 'audio', 'video', 'code', 'other')),
+    ordinal INTEGER NOT NULL DEFAULT 0,
+    text_content TEXT,
+    tool_call_id TEXT,
+    tool_name TEXT,
+    tool_input TEXT,
+    tool_output TEXT,
+    tool_status TEXT,
+    metadata TEXT,
+    FOREIGN KEY (message_id) REFERENCES messages(id)
+);
+CREATE INDEX IF NOT EXISTS message_parts_message_idx ON message_parts(message_id);
+CREATE INDEX IF NOT EXISTS message_parts_type_idx ON message_parts(part_type);
 """
 
 
@@ -131,7 +162,7 @@ class Database:
         self.conn.executescript(_SCHEMA_SQL)
         row = self.conn.execute("SELECT version FROM schema_version").fetchone()
         if row is None:
-            self.conn.execute("INSERT INTO schema_version (version) VALUES (2)")
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (3)")
             self.conn.commit()
 
     def close(self) -> None:

@@ -1,7 +1,7 @@
 """Dataclass models for the store layer."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -41,3 +41,29 @@ class Summary:
     latest_at: str
     model: str
     created_at: str
+
+
+@dataclass
+class ContextItem:
+    """A single item in the ordered context window."""
+    conversation_id: str
+    ordinal: int
+    item_type: str  # 'message' or 'summary'
+    message_id: Optional[str] = None
+    summary_id: Optional[str] = None
+
+
+@dataclass
+class MessagePart:
+    """A structured part of a message (text, tool call, media, etc.)."""
+    part_id: str
+    message_id: str
+    part_type: str
+    ordinal: int = 0
+    text_content: Optional[str] = None
+    tool_call_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    tool_input: Optional[str] = None
+    tool_output: Optional[str] = None
+    tool_status: Optional[str] = None
+    metadata: Optional[str] = None

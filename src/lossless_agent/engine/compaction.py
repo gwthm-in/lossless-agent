@@ -1,12 +1,36 @@
 """Compaction engine: summarises old messages into a DAG of summaries."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+import logging
+from dataclasses import dataclass, field
 from typing import Callable, Awaitable, List, Optional
 
-from lossless_agent.store.abc import AbstractMessageStore, AbstractSummaryStore
+from lossless_agent.store.abc import (
+    AbstractContextItemStore,
+    AbstractMessageStore,
+    AbstractSummaryStore,
+)
 from lossless_agent.store.models import Message, Summary
+from lossless_agent.engine.media import MediaAnnotator
+logger = logging.getLogger(__name__)
 
+
+# ------------------------------------------------------------------
+# Custom exceptions
+# ------------------------------------------------------------------
+
+class LcmProviderAuthError(Exception):
+    """Raised when the summarisation provider rejects credentials."""
+
+
+class SummarizerTimeoutError(Exception):
+    """Raised when the summarisation call exceeds the configured timeout."""
+
+
+# ------------------------------------------------------------------
+# Config
+# ------------------------------------------------------------------
 
 @dataclass
 class CompactionConfig:
@@ -16,19 +40,35 @@ class CompactionConfig:
     leaf_chunk_tokens: int = 20_000
     leaf_min_fanout: int = 4
     condensed_min_fanout: int = 3
+    condensed_min_fanout_hard: int = 2
     context_threshold: float = 0.75
     leaf_target_tokens: int = 1200
     condensed_target_tokens: int = 2000
+    summary_max_overage_factor: float = 3.0
+    summary_timeout_ms: int = 60_000
 
 
 SummarizeFn = Callable[[str], Awaitable[str]]
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token count: 1 token ≈ 4 chars."""
+    return len(text) // 4
+
+
+_media_annotator = MediaAnnotator()
 
 
 def _format_messages(messages: List[Message]) -> str:
     """Format messages into a single text block for the summariser."""
     parts = []
     for m in messages:
-        parts.append(f"[{m.role}] {m.content}")
+        content = _media_annotator.annotate(m.content)
+        parts.append(f"[{m.role}] {content}")
     return "\n".join(parts)
 
 
@@ -40,6 +80,107 @@ def _format_summaries(summaries: List[Summary]) -> str:
     return "\n".join(parts)
 
 
+# ------------------------------------------------------------------
+# Summarization escalation
+# ------------------------------------------------------------------
+
+async def summarize_with_escalation(
+    text: str,
+    summarize_fn: SummarizeFn,
+    target_tokens: int,
+    *,
+    max_overage_factor: float = 3.0,
+    timeout_ms: int = 60_000,
+) -> Optional[str]:
+    """Wrap *summarize_fn* with 4-level escalation to guarantee bounded output.
+
+    Returns ``None`` only when the provider raises :class:`LcmProviderAuthError`
+    (caller should skip / not persist in that case).
+
+    Levels:
+      1. *normal*  – call summarize_fn as-is
+      2. *aggressive* – if output tokens >= input tokens, re-call with
+         "AGGRESSIVE: Compress harder, be more concise" prepended
+      3. *fallback* – deterministic truncation to target_tokens * 4 chars
+      4. *capped* – hard cap at max_overage_factor * target_tokens
+    """
+    input_tokens = _estimate_tokens(text)
+    timeout_s = timeout_ms / 1000.0
+
+    # --- Level 1: normal ---
+    result: Optional[str] = None
+    try:
+        result = await asyncio.wait_for(summarize_fn(text), timeout=timeout_s)
+    except LcmProviderAuthError:
+        logger.warning("Provider auth error during summarisation – skipping")
+        return None
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Summarisation timed out after %dms – falling through to fallback",
+            timeout_ms,
+        )
+    except Exception:
+        logger.exception("Summarisation failed – falling through to fallback")
+
+    if result is not None:
+        result_tokens = _estimate_tokens(result)
+        if result_tokens < input_tokens:
+            # --- Level 4 cap check even on "good" results ---
+            cap_tokens = int(max_overage_factor * target_tokens)
+            if result_tokens > cap_tokens:
+                cap_chars = cap_tokens * 4
+                result = result[:cap_chars]
+                logger.info("Capped summary from %d to %d tokens", result_tokens, cap_tokens)
+            return result
+
+    # --- Level 2: aggressive ---
+    if result is not None and _estimate_tokens(result) >= input_tokens:
+        aggressive_prompt = (
+            "AGGRESSIVE: Compress harder, be more concise\n" + text
+        )
+        try:
+            result = await asyncio.wait_for(
+                summarize_fn(aggressive_prompt), timeout=timeout_s
+            )
+        except LcmProviderAuthError:
+            return None
+        except asyncio.TimeoutError:
+            logger.warning("Aggressive summarisation timed out – falling to fallback")
+            result = None
+        except Exception:
+            logger.exception("Aggressive summarisation failed – falling to fallback")
+            result = None
+
+        if result is not None:
+            result_tokens = _estimate_tokens(result)
+            if result_tokens < input_tokens:
+                cap_tokens = int(max_overage_factor * target_tokens)
+                if result_tokens > cap_tokens:
+                    result = result[: cap_tokens * 4]
+                return result
+
+    # --- Level 3: fallback (deterministic truncation) ---
+    target_chars = target_tokens * 4
+    source = result if result is not None else text
+    truncated = source[:target_chars]
+    suffix = f" [Truncated from {input_tokens} tokens]"
+    result = truncated + suffix
+    logger.info("Fell through to deterministic truncation (level 3)")
+
+    # --- Level 4: hard cap ---
+    cap_tokens = int(max_overage_factor * target_tokens)
+    cap_chars = cap_tokens * 4
+    if len(result) > cap_chars:
+        result = result[:cap_chars]
+        logger.info("Hard-capped summary to %d tokens", cap_tokens)
+
+    return result
+
+
+# ------------------------------------------------------------------
+# Engine
+# ------------------------------------------------------------------
+
 class CompactionEngine:
     """Drives leaf and condensed compaction passes over a conversation."""
 
@@ -49,11 +190,15 @@ class CompactionEngine:
         sum_store: AbstractSummaryStore,
         summarize_fn: SummarizeFn,
         config: CompactionConfig | None = None,
+        circuit_breaker: "CircuitBreaker | None" = None,
+        context_item_store: AbstractContextItemStore | None = None,
     ) -> None:
         self._msg = msg_store
         self._sum = sum_store
         self._summarize = summarize_fn
         self.cfg = config or CompactionConfig()
+        self._cb = circuit_breaker
+        self._ctx = context_item_store
 
     # ------------------------------------------------------------------
     # Chunk selection
@@ -113,11 +258,19 @@ class CompactionEngine:
             return None
 
         text = _format_messages(chunk)
-        summary_text = await self._summarize(text)
+        summary_text = await summarize_with_escalation(
+            text,
+            self._summarize,
+            target_tokens=self.cfg.leaf_target_tokens,
+            max_overage_factor=self.cfg.summary_max_overage_factor,
+            timeout_ms=self.cfg.summary_timeout_ms,
+        )
+        if summary_text is None:
+            return None
 
         source_tokens = sum(m.token_count for m in chunk)
         msg_ids = [m.id for m in chunk]
-        token_count = len(summary_text.split())  # rough estimate
+        token_count = _estimate_tokens(summary_text)
 
         summary = self._sum.create_leaf(
             conversation_id=conv_id,
@@ -129,6 +282,16 @@ class CompactionEngine:
             latest_at=chunk[-1].created_at,
             model="compaction",
         )
+
+        # Maintain context items if store is configured
+        if self._ctx is not None:
+            conv_id_str = str(conv_id)
+            msg_id_strs = [str(mid) for mid in msg_ids]
+            new_ordinal = self._ctx.get_max_ordinal(conv_id_str) + 1
+            self._ctx.replace_messages_with_summary(
+                conv_id_str, msg_id_strs, summary.summary_id, new_ordinal
+            )
+
         return summary
 
     # ------------------------------------------------------------------
@@ -136,11 +299,16 @@ class CompactionEngine:
     # ------------------------------------------------------------------
 
     async def compact_condensed(
-        self, conv_id: int, depth: int = 0
+        self, conv_id: int, depth: int = 0, *, hard_trigger: bool = False,
     ) -> Optional[Summary]:
         """Merge orphan summaries at *depth* into one condensed node."""
         orphan_ids = self._sum.get_orphan_ids(conv_id, depth)
-        if len(orphan_ids) < self.cfg.condensed_min_fanout:
+        min_fanout = (
+            self.cfg.condensed_min_fanout_hard
+            if hard_trigger
+            else self.cfg.condensed_min_fanout
+        )
+        if len(orphan_ids) < min_fanout:
             return None
 
         # Fetch full summary objects for formatting
@@ -149,8 +317,17 @@ class CompactionEngine:
         orphans = [s for s in all_at_depth if s.summary_id in orphan_set]
 
         text = _format_summaries(orphans)
-        summary_text = await self._summarize(text)
-        token_count = len(summary_text.split())
+        summary_text = await summarize_with_escalation(
+            text,
+            self._summarize,
+            target_tokens=self.cfg.condensed_target_tokens,
+            max_overage_factor=self.cfg.summary_max_overage_factor,
+            timeout_ms=self.cfg.summary_timeout_ms,
+        )
+        if summary_text is None:
+            return None
+
+        token_count = _estimate_tokens(summary_text)
 
         summary = self._sum.create_condensed(
             conversation_id=conv_id,
@@ -176,12 +353,115 @@ class CompactionEngine:
         if not self.needs_compaction(conv_id, context_limit):
             return created
 
-        leaf = await self.compact_leaf(conv_id)
-        if leaf is not None:
-            created.append(leaf)
+        # Circuit breaker guard
+        if self._cb is not None:
+            cb_key = str(conv_id)
+            if self._cb.is_open(cb_key):
+                logger.warning(
+                    "Circuit breaker open for conv %d – skipping compaction",
+                    conv_id,
+                )
+                return created
 
-        condensed = await self.compact_condensed(conv_id, depth=0)
-        if condensed is not None:
-            created.append(condensed)
+        try:
+            leaf = await self.compact_leaf(conv_id)
+            if leaf is not None:
+                created.append(leaf)
+
+            condensed = await self.compact_condensed(conv_id, depth=0)
+            if condensed is not None:
+                created.append(condensed)
+
+            if self._cb is not None:
+                self._cb.record_success(str(conv_id))
+        except Exception:
+            if self._cb is not None:
+                self._cb.record_failure(str(conv_id))
+            raise
 
         return created
+
+    # ------------------------------------------------------------------
+    # Full sweep
+    # ------------------------------------------------------------------
+
+    async def compact_full_sweep(
+        self, conv_id: int, *, hard_trigger: bool = False,
+    ) -> List[Summary]:
+        """Phase 1: repeated leaf passes, Phase 2: condensed at increasing depths."""
+        created: List[Summary] = []
+
+        # Phase 1: exhaust leaf compaction
+        while True:
+            leaf = await self.compact_leaf(conv_id)
+            if leaf is None:
+                break
+            created.append(leaf)
+
+        # Phase 2: condensed at increasing depths
+        depth = 0
+        while True:
+            condensed = await self.compact_condensed(
+                conv_id, depth=depth, hard_trigger=hard_trigger
+            )
+            if condensed is None:
+                break
+            created.append(condensed)
+            depth += 1
+
+        return created
+
+    # ------------------------------------------------------------------
+    # Compact until under budget
+    # ------------------------------------------------------------------
+
+    async def compact_until_under(
+        self,
+        conv_id: int,
+        context_limit: int,
+        *,
+        max_rounds: int = 10,
+    ) -> List[Summary]:
+        """Repeatedly sweep until tokens are under budget or no progress."""
+        all_created: List[Summary] = []
+
+        for _ in range(max_rounds):
+            tokens_before = self._msg.total_tokens(conv_id)
+            if not self.needs_compaction(conv_id, context_limit):
+                break
+
+            # Circuit breaker guard
+            if self._cb is not None and self._cb.is_open(str(conv_id)):
+                logger.warning(
+                    "Circuit breaker open for conv %d – aborting compact_until_under",
+                    conv_id,
+                )
+                break
+
+            try:
+                created = await self.compact_full_sweep(
+                    conv_id, hard_trigger=True
+                )
+            except Exception:
+                if self._cb is not None:
+                    self._cb.record_failure(str(conv_id))
+                raise
+
+            all_created.extend(created)
+
+            if not created:
+                break
+
+            tokens_after = self._msg.total_tokens(conv_id)
+            if tokens_after >= tokens_before:
+                # No progress
+                break
+
+            if self._cb is not None:
+                self._cb.record_success(str(conv_id))
+
+        return all_created
+
+
+# Lazy import to avoid circular deps
+from lossless_agent.engine.circuit_breaker import CircuitBreaker  # noqa: E402

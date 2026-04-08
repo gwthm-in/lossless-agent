@@ -8,7 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from .models import Conversation, Message, Summary
+from .models import Conversation, ContextItem, Message, MessagePart, Summary
 
 
 class AbstractConversationStore(ABC):
@@ -125,3 +125,61 @@ class AbstractSummaryStore(ABC):
     @abstractmethod
     def search(self, query: str) -> List[Summary]:
         """Full-text search across summary content."""
+
+
+class AbstractContextItemStore(ABC):
+    """Contract for context items persistence."""
+
+    @abstractmethod
+    def add_message(self, conversation_id: str, ordinal: int, message_id: str) -> ContextItem:
+        """Add a message item to the context window."""
+
+    @abstractmethod
+    def add_summary(self, conversation_id: str, ordinal: int, summary_id: str) -> ContextItem:
+        """Add a summary item to the context window."""
+
+    @abstractmethod
+    def get_items(self, conversation_id: str) -> List[ContextItem]:
+        """Get all context items for a conversation, ordered by ordinal."""
+
+    @abstractmethod
+    def remove_by_message_ids(self, conversation_id: str, message_ids: List[str]) -> None:
+        """Remove context items that reference the given message IDs."""
+
+    @abstractmethod
+    def replace_messages_with_summary(
+        self,
+        conversation_id: str,
+        message_ids: List[str],
+        summary_id: str,
+        new_ordinal: int,
+    ) -> None:
+        """Atomically remove message items and insert a summary item."""
+
+    @abstractmethod
+    def get_max_ordinal(self, conversation_id: str) -> int:
+        """Return the highest ordinal for a conversation, or 0 if empty."""
+
+
+class AbstractMessagePartStore(ABC):
+    """Contract for message parts persistence."""
+
+    @abstractmethod
+    def add(self, part: MessagePart) -> MessagePart:
+        """Insert a message part."""
+
+    @abstractmethod
+    def get_by_message(self, message_id: str) -> List[MessagePart]:
+        """Get all parts for a message, ordered by ordinal."""
+
+    @abstractmethod
+    def get_by_id(self, part_id: str) -> Optional[MessagePart]:
+        """Get a single part by its ID."""
+
+    @abstractmethod
+    def get_by_type(self, message_id: str, part_type: str) -> List[MessagePart]:
+        """Get parts of a specific type for a message."""
+
+    @abstractmethod
+    def delete_by_message(self, message_id: str) -> int:
+        """Delete all parts for a message. Return count deleted."""

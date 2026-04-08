@@ -44,6 +44,10 @@ class LCMConfig:
     ignore_session_patterns: List[str] = field(default_factory=list)
     incremental_max_depth: int = 1
     summary_timeout_ms: int = 60_000
+    summary_max_overage_factor: float = 3.0
+    condensed_min_fanout_hard: int = 2
+    circuit_breaker_threshold: int = 5
+    circuit_breaker_cooldown_ms: int = 30_000
 
     # ------------------------------------------------------------------
     # Env-var mapping
@@ -67,6 +71,10 @@ class LCMConfig:
         "ignore_session_patterns": ("LCM_IGNORE_SESSION_PATTERNS", None),
         "incremental_max_depth": ("LCM_INCREMENTAL_MAX_DEPTH", int),
         "summary_timeout_ms": ("LCM_SUMMARY_TIMEOUT_MS", int),
+        "summary_max_overage_factor": ("LCM_SUMMARY_MAX_OVERAGE_FACTOR", float),
+        "condensed_min_fanout_hard": ("LCM_CONDENSED_MIN_FANOUT_HARD", int),
+        "circuit_breaker_threshold": ("LCM_CIRCUIT_BREAKER_THRESHOLD", int),
+        "circuit_breaker_cooldown_ms": ("LCM_CIRCUIT_BREAKER_COOLDOWN_MS", int),
     }
 
     # ------------------------------------------------------------------
@@ -120,9 +128,12 @@ class LCMConfig:
             leaf_chunk_tokens=self.leaf_chunk_tokens,
             leaf_min_fanout=self.leaf_min_fanout,
             condensed_min_fanout=self.condensed_min_fanout,
+            condensed_min_fanout_hard=self.condensed_min_fanout_hard,
             context_threshold=self.context_threshold,
             leaf_target_tokens=self.leaf_target_tokens,
             condensed_target_tokens=self.condensed_target_tokens,
+            summary_max_overage_factor=self.summary_max_overage_factor,
+            summary_timeout_ms=self.summary_timeout_ms,
         )
 
     def to_assembler_config(self) -> AssemblerConfig:
