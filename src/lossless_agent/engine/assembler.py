@@ -20,6 +20,14 @@ class AssemblerConfig:
     summary_budget_ratio: float = 0.4
     fresh_tail_count: int = 8
     repair_transcripts: bool = True
+    max_assembly_token_budget: Optional[int] = None  # Hard cap from LCM_MAX_ASSEMBLY_TOKEN_BUDGET
+
+    @property
+    def effective_max_tokens(self) -> int:
+        """Return the effective token budget (respects hard cap if set)."""
+        if self.max_assembly_token_budget is not None:
+            return min(self.max_context_tokens, self.max_assembly_token_budget)
+        return self.max_context_tokens
 
 
 @dataclass
@@ -190,7 +198,7 @@ class ContextAssembler:
         protected_tokens = sum(m.token_count for m in protected_from_prefix)
 
         # 2. Summary budget
-        remaining = self.cfg.max_context_tokens - tail_tokens - protected_tokens
+        remaining = self.cfg.effective_max_tokens - tail_tokens - protected_tokens
         summary_budget = remaining * self.cfg.summary_budget_ratio
 
         if summary_budget <= 0:

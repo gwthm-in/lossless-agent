@@ -22,6 +22,8 @@ class LargeFileConfig:
     token_threshold: int = 25_000
     summary_target_tokens: int = 500
     file_storage_dir: str = "~/.lossless-agent/files/"
+    summary_provider: str = ""  # LCM_LARGE_FILE_SUMMARY_PROVIDER
+    summary_model: str = ""  # LCM_LARGE_FILE_SUMMARY_MODEL
 
 
 def _generate_file_id() -> str:

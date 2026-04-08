@@ -168,6 +168,23 @@ class LCMConfig:
             condensed_target_tokens=self.condensed_target_tokens,
             summary_max_overage_factor=self.summary_max_overage_factor,
             summary_timeout_ms=self.summary_timeout_ms,
+            custom_instructions=self.custom_instructions,
+        )
+
+    def to_expand_query_config(self):
+        """Map flat LCMConfig fields to ExpandQueryConfig."""
+        from lossless_agent.tools.expand_query import ExpandQueryConfig
+        return ExpandQueryConfig(
+            timeout_ms=self.delegation_timeout_ms,
+            expansion_model=self.expansion_model,
+        )
+
+    def to_large_file_config(self):
+        """Map flat LCMConfig fields to LargeFileConfig."""
+        from lossless_agent.engine.large_files import LargeFileConfig
+        return LargeFileConfig(
+            summary_provider=self.large_file_summary_provider,
+            summary_model=self.large_file_summary_model,
         )
 
     def to_assembler_config(self) -> AssemblerConfig:
@@ -176,6 +193,7 @@ class LCMConfig:
             max_context_tokens=self.max_context_tokens,
             summary_budget_ratio=self.summary_budget_ratio,
             fresh_tail_count=self.fresh_tail_count,
+            max_assembly_token_budget=self.max_assembly_token_budget,
         )
 
     # ------------------------------------------------------------------

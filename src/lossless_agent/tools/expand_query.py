@@ -27,6 +27,7 @@ class ExpandQueryConfig:
     max_tokens: int = 4000
     timeout_ms: int = 120000
     max_steps: int = 10
+    expansion_model: str = ""  # Model override for expansion (LCM_EXPANSION_MODEL)
 
 
 @dataclass
