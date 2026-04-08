@@ -31,8 +31,37 @@ Or create `.mcp.json` in your project root with:
 ```
 
 That's it. Claude Code automatically discovers `.mcp.json` and connects to
-the MCP server. You now have `lcm_grep`, `lcm_describe`, and `lcm_expand`
-tools available in every session.
+the MCP server.
+
+## Available Tools
+
+### Recall (read-only)
+- `lcm_grep` — Full-text search across messages and summaries
+- `lcm_describe` — Get metadata for a summary node
+- `lcm_expand` — Drill into a summary's source content
+- `lcm_expand_query` — AI-powered contextual search
+- `lcm_stats` — Database statistics
+
+### Lifecycle (read-write)
+- `lcm_ingest` — Store messages into the database (auto-compacts)
+- `lcm_compact` — Force compaction sweep
+- `lcm_get_context` — Assemble optimized context within token budget
+- `lcm_session_end` — Signal session end for final compaction
+
+## Full Lifecycle Setup
+
+For automatic context management, add instructions to your `CLAUDE.md`:
+
+```bash
+python -m examples.claude_code_middleware my-project > CLAUDE.md
+```
+
+This tells Claude Code to:
+1. Call `lcm_get_context` at session start to load prior context
+2. Call `lcm_ingest` after each turn to persist messages
+3. Call `lcm_session_end` when the session ends
+
+See [`../claude_code_middleware.py`](../claude_code_middleware.py) for details.
 
 ## Customization
 
@@ -40,6 +69,12 @@ tools available in every session.
 
 ```json
 "args": ["--db-path", "~/.lcm/my-project.db"]
+```
+
+**Use LLM-quality summaries** — add `--summarize-command`:
+
+```json
+"args": ["--db-path", "./data/lcm.db", "--summarize-command", "python my_summarizer.py"]
 ```
 
 **Per-project databases** — each project gets its own `.mcp.json` with a
@@ -51,4 +86,4 @@ Start Claude Code in your project directory. Ask:
 
 > "What LCM tools do you have?"
 
-You should see `lcm_grep`, `lcm_describe`, and `lcm_expand` in the response.
+You should see all 9 tools listed in the response.

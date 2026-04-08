@@ -12,6 +12,77 @@ Lossless Agent supports **two integration modes**:
 
 ---
 
+## Conversation Lifecycle
+
+The LCM MCP server provides **9 tools** covering the full conversation lifecycle:
+
+### Read-Only Tools (Recall)
+| Tool | Description |
+|------|-------------|
+| `lcm_grep` | Full-text search across messages and summaries |
+| `lcm_describe` | Get metadata for a summary node by ID |
+| `lcm_expand` | Expand a summary to see source messages/children |
+| `lcm_expand_query` | AI-powered search with automatic expansion |
+| `lcm_stats` | Database statistics (message/summary counts) |
+
+### Read-Write Tools (Lifecycle)
+| Tool | Description |
+|------|-------------|
+| `lcm_ingest` | Store messages + auto-compact when threshold exceeded |
+| `lcm_compact` | Force a full compaction sweep |
+| `lcm_get_context` | Assemble optimized context within token budget |
+| `lcm_session_end` | Signal session end for final compaction |
+
+### Full Loop Pattern
+
+Every framework integration should follow this pattern:
+
+```
+┌─────────────────────────────────────────────┐
+│                SESSION START                │
+│  lcm_get_context(session_key, max_tokens)   │
+│  → Returns: summaries + recent messages     │
+└──────────────────┬──────────────────────────┘
+                   │
+          ┌────────▼────────┐
+          │   AGENT TURN    │◄──────────────┐
+          │  (user + reply) │               │
+          └────────┬────────┘               │
+                   │                        │
+     ┌─────────────▼─────────────┐          │
+     │  lcm_ingest(session_key,  │          │
+     │    messages=[...])        │          │
+     │  → Auto-compacts if needed│          │
+     └─────────────┬─────────────┘          │
+                   │                        │
+          ┌────────▼────────┐    yes        │
+          │  More turns?    │───────────────┘
+          └────────┬────────┘
+                   │ no
+     ┌─────────────▼─────────────┐
+     │  lcm_session_end(         │
+     │    session_key)           │
+     │  → Final compaction       │
+     └───────────────────────────┘
+```
+
+### Summarization
+
+The MCP server uses deterministic truncation by default for compaction
+summaries. This preserves the DAG structure — original messages are always
+recoverable via `lcm_expand`, even if summary text is truncated.
+
+For LLM-quality summaries, use `--summarize-command`:
+
+```bash
+lossless-agent-mcp --db-path ./data/lcm.db --summarize-command 'python my_summarizer.py'
+```
+
+The command receives the summarization prompt on stdin and should write
+the summary to stdout.
+
+---
+
 ## 1. Claude Code
 
 **Mode:** MCP Server (zero code)
@@ -39,11 +110,24 @@ pip install lossless-agent
 ```
 
 Claude Code auto-discovers `.mcp.json` and connects. Your agent now has
-`lcm_grep`, `lcm_describe`, and `lcm_expand` tools.
+all 9 LCM tools: `lcm_grep`, `lcm_describe`, `lcm_expand`, `lcm_stats`,
+`lcm_expand_query`, `lcm_ingest`, `lcm_compact`, `lcm_get_context`, and
+`lcm_session_end`.
+
+### Step 3 (optional): Add lifecycle instructions to CLAUDE.md
+
+```bash
+python examples/claude_code_middleware.py my-project > CLAUDE.md
+```
+
+This generates instructions that tell Claude Code to automatically call
+`lcm_get_context` at session start, `lcm_ingest` after each turn, and
+`lcm_session_end` when done.
 
 **Verify:** Ask Claude Code _"What LCM tools do you have?"_
 
 See: [`examples/claude_code_setup/`](../examples/claude_code_setup/)
+See: [`examples/claude_code_middleware.py`](../examples/claude_code_middleware.py)
 
 ---
 
@@ -74,7 +158,7 @@ For Cursor, add to `.cursor/mcp.json`:
 
 ## 3. Google ADK (Agent Development Kit)
 
-**Mode:** MCP Server via `McpToolset`
+**Mode:** MCP Server via `McpToolset` + lifecycle callbacks
 
 ### Install
 
@@ -86,7 +170,9 @@ pip install lossless-agent google-adk
 
 ```python
 from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
+from examples.google_adk_middleware import LCMLifecycleCallbacks
 
+# Connect to LCM MCP server
 mcp_tools, cleanup = await McpToolset.from_server(
     connection_params=StdioConnectionParams(
         command="lossless-agent-mcp",
@@ -94,54 +180,65 @@ mcp_tools, cleanup = await McpToolset.from_server(
     )
 )
 
+# Set up lifecycle callbacks
+lcm = LCMLifecycleCallbacks(session_key="my-adk-project")
+
 agent = Agent(
     model="gemini-2.0-flash",
     name="my_agent",
-    instruction="You have lossless context management tools.",
+    instruction=lcm.get_instruction(),
     tools=mcp_tools,
+    before_agent_callback=lcm.before_agent,
+    after_agent_callback=lcm.after_agent,
 )
 
 # ... run your agent ...
 
-await cleanup()  # close MCP connection when done
+await lcm.on_session_end(runner)
+await cleanup()
 ```
 
+See: [`examples/google_adk_middleware.py`](../examples/google_adk_middleware.py)
 See: [`examples/google_adk_setup.py`](../examples/google_adk_setup.py)
 
 ---
 
-## 4. Anthropic SDK (Client-Side MCP)
+## 4. Anthropic SDK (Client-Side)
 
-**Mode:** MCP Server via `anthropic[mcp]`
+**Mode:** Python middleware wrapping Anthropic API calls
 
 ### Install
 
 ```bash
-pip install lossless-agent 'anthropic[mcp]'
+pip install lossless-agent anthropic
 ```
 
 ### Setup
 
 ```python
-from anthropic.types.mcp import MCPServerStdio
-
-mcp_server = MCPServerStdio(
-    command="lossless-agent-mcp",
-    args=["--db-path", "./data/lcm.db"],
-)
+import anthropic
+from examples.anthropic_sdk_middleware import LCMMiddleware
 
 client = anthropic.Anthropic()
+lcm = LCMMiddleware(
+    session_key="my-project",
+    db_path="./data/lcm.db",
+)
 
-async with client.messages.stream(
-    model="claude-sonnet-4-20250514",
-    max_tokens=1024,
-    mcp_servers=[mcp_server],
-    messages=[{"role": "user", "content": "Search history for deployment"}],
-) as stream:
-    async for text in stream.text_stream:
-        print(text, end="")
+# Chat with automatic context loading + ingestion
+response = lcm.chat(client, "What were we discussing last time?")
+print(response)
+
+# End session
+lcm.end_session()
 ```
 
+The middleware automatically:
+1. Calls `lcm_get_context` before each API call
+2. Calls `lcm_ingest` after each API call
+3. Calls `lcm_session_end` when you're done
+
+See: [`examples/anthropic_sdk_middleware.py`](../examples/anthropic_sdk_middleware.py)
 See: [`examples/anthropic_agents_setup.py`](../examples/anthropic_agents_setup.py)
 
 ---
