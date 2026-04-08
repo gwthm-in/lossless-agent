@@ -4,6 +4,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, List, Optional
 
+from lossless_agent.engine.expansion_auth import ExpansionAuthManager
+from lossless_agent.engine.expansion_policy import (
+    ExpansionPolicy,
+    PolicyAction,
+)
 from lossless_agent.store.database import Database
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
@@ -32,6 +37,7 @@ class ExpandQueryResult:
     cited_summaries: List[str]
     tokens_used: int
     steps_taken: int
+    reason: Optional[str] = None
 
 
 class ExpansionOrchestrator:
@@ -44,25 +50,71 @@ class ExpansionOrchestrator:
         sum_store: SummaryStore,
         expand_fn: Callable[..., Coroutine[Any, Any, str]],
         config: Optional[ExpandQueryConfig] = None,
+        auth_manager: Optional[ExpansionAuthManager] = None,
+        policy: Optional[ExpansionPolicy] = None,
     ) -> None:
         self.db = db
         self.msg_store = msg_store
         self.sum_store = sum_store
         self.expand_fn = expand_fn
         self.config = config or ExpandQueryConfig()
+        self.auth_manager = auth_manager
+        self.policy = policy
 
     async def expand_query(
-        self, conversation_id: int, query: str
+        self, conversation_id: int, query: str, grant_id: Optional[str] = None,
     ) -> ExpandQueryResult:
         """Run a simplified sub-agent loop to answer a query about past context.
 
         Steps:
+        0. (optional) Validate auth grant, apply policy decision
         1. lcm_grep to find relevant summaries/messages
         2. lcm_describe on each summary hit (up to 5)
         3. lcm_expand on leaf summaries to get source messages
         4. Call expand_fn with compiled context + query
         5. Return ExpandQueryResult
         """
+        # Auth validation
+        if self.auth_manager is not None and grant_id is not None:
+            self.auth_manager.validate_grant(grant_id)
+            self.auth_manager.validate_scope(grant_id, str(conversation_id))
+
+        # Policy decision
+        if self.policy is not None:
+            # Gather summary candidates for policy decision
+            summary_rows = self.db.conn.execute(
+                "SELECT summary_id, conversation_id, kind, depth, content, "
+                "token_count, source_token_count, earliest_at, latest_at, "
+                "model, created_at "
+                "FROM summaries WHERE conversation_id = ? LIMIT 20",
+                (conversation_id,),
+            ).fetchall()
+            from lossless_agent.store.models import Summary
+            candidates = [
+                Summary(
+                    summary_id=r[0], conversation_id=r[1], kind=r[2],
+                    depth=r[3], content=r[4], token_count=r[5],
+                    source_token_count=r[6], earliest_at=r[7],
+                    latest_at=r[8], model=r[9], created_at=r[10],
+                )
+                for r in summary_rows
+            ]
+            token_budget = self.config.max_tokens
+            if self.auth_manager is not None and grant_id is not None:
+                token_budget = self.auth_manager.get_remaining_budget(grant_id)
+            decision = self.policy.decide(query, candidates, token_budget)
+
+            if decision.action == PolicyAction.ANSWER_DIRECTLY:
+                return ExpandQueryResult(
+                    answer="",
+                    cited_summaries=[],
+                    tokens_used=0,
+                    steps_taken=0,
+                    reason="; ".join(decision.reasons),
+                )
+            # EXPAND_SHALLOW -> proceed with current simple pipeline
+            # DELEGATE_TRAVERSAL -> proceed with full pipeline (same code path)
+
         steps = 0
         max_steps = self.config.max_steps
         cited_summaries: List[str] = []
@@ -149,10 +201,16 @@ class ExpansionOrchestrator:
         prompt = self._build_prompt(query, compiled_context)
         answer = await self.expand_fn(prompt)
 
+        tokens_used = len(answer)
+
+        # Consume token budget if auth is active
+        if self.auth_manager is not None and grant_id is not None:
+            self.auth_manager.consume_token_budget(grant_id, tokens_used)
+
         return ExpandQueryResult(
             answer=answer,
             cited_summaries=cited_summaries,
-            tokens_used=len(answer),
+            tokens_used=tokens_used,
             steps_taken=steps,
         )
 

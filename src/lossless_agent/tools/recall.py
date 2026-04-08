@@ -44,6 +44,7 @@ class GrepResult:
     content_snippet: str
     conversation_id: int
     metadata: Dict[str, Any]
+    created_at: Optional[str] = None
 
 
 @dataclass
@@ -80,18 +81,26 @@ def _like_search(
     conversation_id: Optional[int],
     limit: int,
     result_type: str,
+    since: Optional[str] = None,
+    before: Optional[str] = None,
 ) -> List[GrepResult]:
     """Generic LIKE fallback search for messages or summaries."""
     results: List[GrepResult] = []
     if table == "messages":
         sql = (
-            "SELECT id, conversation_id, content, role, seq "
+            "SELECT id, conversation_id, content, role, seq, created_at "
             "FROM messages WHERE content LIKE ?"
         )
         params: list = [f"%{query}%"]
         if conversation_id is not None:
             sql += " AND conversation_id = ?"
             params.append(conversation_id)
+        if since is not None:
+            sql += " AND created_at >= ?"
+            params.append(since)
+        if before is not None:
+            sql += " AND created_at < ?"
+            params.append(before)
         sql += " LIMIT ?"
         params.append(limit)
         for row in db.conn.execute(sql, params).fetchall():
@@ -102,17 +111,24 @@ def _like_search(
                     content_snippet=_truncate(row[2]),
                     conversation_id=row[1],
                     metadata={"role": row[3], "seq": row[4]},
+                    created_at=row[5],
                 )
             )
     else:
         sql = (
-            "SELECT summary_id, conversation_id, content, kind, depth "
+            "SELECT summary_id, conversation_id, content, kind, depth, created_at "
             "FROM summaries WHERE content LIKE ?"
         )
         params = [f"%{query}%"]
         if conversation_id is not None:
             sql += " AND conversation_id = ?"
             params.append(conversation_id)
+        if since is not None:
+            sql += " AND created_at >= ?"
+            params.append(since)
+        if before is not None:
+            sql += " AND created_at < ?"
+            params.append(before)
         sql += " LIMIT ?"
         params.append(limit)
         for row in db.conn.execute(sql, params).fetchall():
@@ -123,6 +139,7 @@ def _like_search(
                     content_snippet=_truncate(row[2]),
                     conversation_id=row[1],
                     metadata={"kind": row[3], "depth": row[4]},
+                    created_at=row[5],
                 )
             )
     return results
@@ -133,19 +150,21 @@ def _fts_search_messages(
     query: str,
     conversation_id: Optional[int],
     limit: int,
+    since: Optional[str] = None,
+    before: Optional[str] = None,
 ) -> List[GrepResult]:
     """Search messages via FTS5 with LIKE fallback."""
     # CJK: default FTS5 tokenizer can't handle CJK, use LIKE directly
     if _contains_cjk(query):
-        return _like_search(db, "messages", query, conversation_id, limit, "message")
+        return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
 
     safe_query = _sanitize_fts5_query(query)
     if not safe_query:
-        return _like_search(db, "messages", query, conversation_id, limit, "message")
+        return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
 
     try:
         sql = (
-            "SELECT m.id, m.conversation_id, m.content, m.role, m.seq "
+            "SELECT m.id, m.conversation_id, m.content, m.role, m.seq, m.created_at "
             "FROM messages m "
             "JOIN messages_fts f ON m.id = f.rowid "
             "WHERE messages_fts MATCH ?"
@@ -154,6 +173,12 @@ def _fts_search_messages(
         if conversation_id is not None:
             sql += " AND m.conversation_id = ?"
             params.append(conversation_id)
+        if since is not None:
+            sql += " AND m.created_at >= ?"
+            params.append(since)
+        if before is not None:
+            sql += " AND m.created_at < ?"
+            params.append(before)
         sql += " ORDER BY f.rank LIMIT ?"
         params.append(limit)
 
@@ -166,11 +191,12 @@ def _fts_search_messages(
                     content_snippet=_truncate(row[2]),
                     conversation_id=row[1],
                     metadata={"role": row[3], "seq": row[4]},
+                    created_at=row[5],
                 )
             )
         return results
     except Exception:
-        return _like_search(db, "messages", query, conversation_id, limit, "message")
+        return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
 
 
 def _fts_search_summaries(
@@ -178,6 +204,8 @@ def _fts_search_summaries(
     query: str,
     conversation_id: Optional[int],
     limit: int,
+    since: Optional[str] = None,
+    before: Optional[str] = None,
 ) -> List[GrepResult]:
     """Search summaries via FTS5, routing CJK to trigram table with LIKE fallback."""
     is_cjk = _contains_cjk(query)
@@ -187,7 +215,7 @@ def _fts_search_summaries(
         if is_cjk:
             # Use trigram CJK FTS table
             sql = (
-                "SELECT s.summary_id, s.conversation_id, s.content, s.kind, s.depth "
+                "SELECT s.summary_id, s.conversation_id, s.content, s.kind, s.depth, s.created_at "
                 "FROM summaries s "
                 "JOIN summaries_fts_cjk fc ON s.summary_id = fc.summary_id "
                 "WHERE summaries_fts_cjk MATCH ?"
@@ -198,7 +226,7 @@ def _fts_search_summaries(
             if not safe_query:
                 return results
             sql = (
-                "SELECT s.summary_id, s.conversation_id, s.content, s.kind, s.depth "
+                "SELECT s.summary_id, s.conversation_id, s.content, s.kind, s.depth, s.created_at "
                 "FROM summaries s "
                 "JOIN summaries_fts f ON s.rowid = f.rowid "
                 "WHERE summaries_fts MATCH ?"
@@ -208,6 +236,12 @@ def _fts_search_summaries(
         if conversation_id is not None:
             sql += " AND s.conversation_id = ?"
             params.append(conversation_id)
+        if since is not None:
+            sql += " AND s.created_at >= ?"
+            params.append(since)
+        if before is not None:
+            sql += " AND s.created_at < ?"
+            params.append(before)
         sql += " LIMIT ?"
         params.append(limit)
 
@@ -219,6 +253,7 @@ def _fts_search_summaries(
                     content_snippet=_truncate(row[2]),
                     conversation_id=row[1],
                     metadata={"kind": row[3], "depth": row[4]},
+                    created_at=row[5],
                 )
             )
         # If CJK FTS returned nothing (e.g. query too short for trigrams),
@@ -229,7 +264,83 @@ def _fts_search_summaries(
         pass  # fall through to LIKE
 
     # LIKE fallback
-    return _like_search(db, "summaries", query, conversation_id, limit, "summary")
+    return _like_search(db, "summaries", query, conversation_id, limit, "summary", since=since, before=before)
+
+
+def _regex_search(
+    db: Database,
+    query: str,
+    scope: str,
+    conversation_id: Optional[int],
+    limit: int,
+    since: Optional[str] = None,
+    before: Optional[str] = None,
+) -> List[GrepResult]:
+    """Search messages and/or summaries using LIKE-based pattern matching with Python re post-filter."""
+    results: List[GrepResult] = []
+    pattern = re.compile(query)
+
+    if scope in ("all", "messages"):
+        sql = (
+            "SELECT id, conversation_id, content, role, seq, created_at "
+            "FROM messages WHERE 1=1"
+        )
+        params: list = []
+        if conversation_id is not None:
+            sql += " AND conversation_id = ?"
+            params.append(conversation_id)
+        if since is not None:
+            sql += " AND created_at >= ?"
+            params.append(since)
+        if before is not None:
+            sql += " AND created_at < ?"
+            params.append(before)
+        for row in db.conn.execute(sql, params).fetchall():
+            if pattern.search(row[2] or ""):
+                results.append(
+                    GrepResult(
+                        type="message",
+                        id=row[0],
+                        content_snippet=_truncate(row[2]),
+                        conversation_id=row[1],
+                        metadata={"role": row[3], "seq": row[4]},
+                        created_at=row[5],
+                    )
+                )
+                if len(results) >= limit:
+                    return results
+
+    if scope in ("all", "summaries"):
+        sql = (
+            "SELECT summary_id, conversation_id, content, kind, depth, created_at "
+            "FROM summaries WHERE 1=1"
+        )
+        params = []
+        if conversation_id is not None:
+            sql += " AND conversation_id = ?"
+            params.append(conversation_id)
+        if since is not None:
+            sql += " AND created_at >= ?"
+            params.append(since)
+        if before is not None:
+            sql += " AND created_at < ?"
+            params.append(before)
+        for row in db.conn.execute(sql, params).fetchall():
+            if pattern.search(row[2] or ""):
+                results.append(
+                    GrepResult(
+                        type="summary",
+                        id=row[0],
+                        content_snippet=_truncate(row[2]),
+                        conversation_id=row[1],
+                        metadata={"kind": row[3], "depth": row[4]},
+                        created_at=row[5],
+                    )
+                )
+                if len(results) >= limit:
+                    return results
+
+    return results[:limit]
 
 
 def lcm_grep(
@@ -238,13 +349,24 @@ def lcm_grep(
     scope: str = "all",
     conversation_id: Optional[int] = None,
     limit: int = 20,
+    mode: str = "full_text",
+    since: Optional[str] = None,
+    before: Optional[str] = None,
 ) -> List[GrepResult]:
     """Search messages and/or summaries via FTS5.
 
     CJK queries are automatically routed to the trigram FTS table for
     summaries. All FTS5 queries are sanitized. If FTS5 fails, falls
     back to LIKE search.
+
+    Args:
+        mode: 'full_text' (default) for FTS5 search, 'regex' for regex matching
+        since: Optional ISO timestamp to filter results created at or after
+        before: Optional ISO timestamp to filter results created before
     """
+    if mode == "regex":
+        return _regex_search(db, query, scope, conversation_id, limit, since=since, before=before)
+
     results: List[GrepResult] = []
 
     is_cjk = _contains_cjk(query)
@@ -252,12 +374,12 @@ def lcm_grep(
     if scope in ("all", "messages"):
         if is_cjk:
             # CJK: use LIKE directly for messages (default tokenizer can't handle CJK)
-            results.extend(_fts_search_messages(db, query, conversation_id, limit))
+            results.extend(_fts_search_messages(db, query, conversation_id, limit, since=since, before=before))
         else:
-            results.extend(_fts_search_messages(db, query, conversation_id, limit))
+            results.extend(_fts_search_messages(db, query, conversation_id, limit, since=since, before=before))
 
     if scope in ("all", "summaries"):
-        results.extend(_fts_search_summaries(db, query, conversation_id, limit))
+        results.extend(_fts_search_summaries(db, query, conversation_id, limit, since=since, before=before))
 
     # Global limit when scope='all'
     return results[:limit]

@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, fields, asdict
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from lossless_agent.engine.compaction import CompactionConfig
 from lossless_agent.engine.assembler import AssemblerConfig
@@ -17,6 +17,14 @@ from lossless_agent.engine.assembler import AssemblerConfig
 def _parse_bool(value: str) -> bool:
     """Parse a boolean from an environment variable string."""
     return value.strip().lower() in ("true", "1", "yes")
+
+
+def _parse_optional_int(value: str) -> Optional[int]:
+    """Parse an optional int: empty string -> None, otherwise int."""
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return int(stripped)
 
 
 @dataclass
@@ -29,12 +37,12 @@ class LCMConfig:
 
     enabled: bool = True
     db_path: str = "~/.lossless-agent/lcm.db"
-    fresh_tail_count: int = 8
+    fresh_tail_count: int = 64
     leaf_chunk_tokens: int = 20_000
-    leaf_min_fanout: int = 4
-    condensed_min_fanout: int = 3
+    leaf_min_fanout: int = 8
+    condensed_min_fanout: int = 4
     context_threshold: float = 0.75
-    leaf_target_tokens: int = 1200
+    leaf_target_tokens: int = 2400
     condensed_target_tokens: int = 2000
     max_context_tokens: int = 128_000
     summary_budget_ratio: float = 0.4
@@ -47,11 +55,26 @@ class LCMConfig:
     summary_max_overage_factor: float = 3.0
     condensed_min_fanout_hard: int = 2
     circuit_breaker_threshold: int = 5
-    circuit_breaker_cooldown_ms: int = 30_000
+    circuit_breaker_cooldown_ms: int = 1_800_000
+
+    # New config options
+    stateless_session_patterns: List[str] = field(default_factory=list)
+    skip_stateless_sessions: bool = True
+    new_session_retain_depth: int = 2
+    bootstrap_max_tokens: int = 6000
+    large_file_summary_provider: str = ""
+    large_file_summary_model: str = ""
+    delegation_timeout_ms: int = 120_000
+    prune_heartbeat_ok: bool = False
+    max_assembly_token_budget: Optional[int] = None
+    custom_instructions: str = ""
+    timezone: str = ""
 
     # ------------------------------------------------------------------
     # Env-var mapping
     # ------------------------------------------------------------------
+
+    _COMMA_LIST_FIELDS = {"ignore_session_patterns", "stateless_session_patterns"}
 
     _ENV_MAP = {
         "enabled": ("LCM_ENABLED", _parse_bool),
@@ -75,6 +98,17 @@ class LCMConfig:
         "condensed_min_fanout_hard": ("LCM_CONDENSED_MIN_FANOUT_HARD", int),
         "circuit_breaker_threshold": ("LCM_CIRCUIT_BREAKER_THRESHOLD", int),
         "circuit_breaker_cooldown_ms": ("LCM_CIRCUIT_BREAKER_COOLDOWN_MS", int),
+        "stateless_session_patterns": ("LCM_STATELESS_SESSION_PATTERNS", None),
+        "skip_stateless_sessions": ("LCM_SKIP_STATELESS_SESSIONS", _parse_bool),
+        "new_session_retain_depth": ("LCM_NEW_SESSION_RETAIN_DEPTH", int),
+        "bootstrap_max_tokens": ("LCM_BOOTSTRAP_MAX_TOKENS", int),
+        "large_file_summary_provider": ("LCM_LARGE_FILE_SUMMARY_PROVIDER", str),
+        "large_file_summary_model": ("LCM_LARGE_FILE_SUMMARY_MODEL", str),
+        "delegation_timeout_ms": ("LCM_DELEGATION_TIMEOUT_MS", int),
+        "prune_heartbeat_ok": ("LCM_PRUNE_HEARTBEAT_OK", _parse_bool),
+        "max_assembly_token_budget": ("LCM_MAX_ASSEMBLY_TOKEN_BUDGET", _parse_optional_int),
+        "custom_instructions": ("LCM_CUSTOM_INSTRUCTIONS", str),
+        "timezone": ("LCM_TIMEZONE", str),
     }
 
     # ------------------------------------------------------------------
@@ -92,7 +126,7 @@ class LCMConfig:
             raw = os.environ.get(env_var)
             if raw is None:
                 continue
-            if field_name == "ignore_session_patterns":
+            if field_name in cls._COMMA_LIST_FIELDS:
                 kwargs[field_name] = [
                     p.strip() for p in raw.split(",") if p.strip()
                 ]
@@ -183,7 +217,16 @@ class LCMConfig:
             errors.append("leaf_chunk_tokens must be > 0")
         if self.max_context_tokens <= 0:
             errors.append("max_context_tokens must be > 0")
+        if self.delegation_timeout_ms < 0:
+            errors.append("delegation_timeout_ms must be >= 0")
+        if self.new_session_retain_depth < 0:
+            errors.append("new_session_retain_depth must be >= 0")
         return errors
+
+    @property
+    def effective_bootstrap_max_tokens(self) -> int:
+        """Return bootstrap_max_tokens floored at max(6000, leaf_chunk_tokens * 0.3)."""
+        return max(self.bootstrap_max_tokens, int(self.leaf_chunk_tokens * 0.3))
 
     # ------------------------------------------------------------------
     # Path helpers

@@ -178,6 +178,59 @@ async def summarize_with_escalation(
 
 
 # ------------------------------------------------------------------
+# Prior summary context resolution
+# ------------------------------------------------------------------
+
+def resolve_prior_summary_context(
+    conversation_id: int,
+    chunk_start_seq: int,
+    summary_store: AbstractSummaryStore,
+    context_item_store: AbstractContextItemStore | None = None,
+    limit: int = 2,
+) -> str:
+    """Retrieve previous summary content to provide context for leaf compaction.
+
+    Strategy 1 (context_item_store available):
+      Get context items with ordinal < chunk's first message ordinal,
+      filter to summaries, take last *limit*, fetch content.
+
+    Strategy 2 (fallback):
+      Get all summaries for conversation ordered by created_at,
+      filter to those covering time before chunk start, take last *limit*.
+
+    Returns joined summary content (double newline separated), or ''.
+    """
+    if context_item_store is not None:
+        items = context_item_store.get_items(str(conversation_id))
+        # Filter to items before the chunk start ordinal that are summaries
+        summary_items = [
+            it for it in items
+            if it.item_type == "summary" and it.ordinal < chunk_start_seq
+        ]
+        # Take last `limit` items
+        recent = summary_items[-limit:]
+        contents = []
+        for it in recent:
+            if it.summary_id:
+                s = summary_store.get_by_id(it.summary_id)
+                if s:
+                    contents.append(s.content)
+        return "\n\n".join(contents)
+
+    # Fallback: use summary store directly
+    all_summaries = summary_store.get_by_conversation(conversation_id)
+    # Sort by created_at
+    all_summaries.sort(key=lambda s: s.created_at)
+    # We need summaries whose latest_at is before our chunk
+    # Since we don't have exact timestamps from seq, we use all summaries
+    # that were created before our chunk's messages
+    # Use depth 0 (leaf) summaries for context
+    prior = [s for s in all_summaries if s.depth == 0]
+    recent = prior[-limit:]
+    return "\n\n".join(s.content for s in recent)
+
+
+# ------------------------------------------------------------------
 # Engine
 # ------------------------------------------------------------------
 

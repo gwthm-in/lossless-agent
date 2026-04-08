@@ -13,6 +13,8 @@ from mcp.server.stdio import stdio_server
 import mcp.types as types
 
 from lossless_agent.store.database import Database
+from lossless_agent.store.message_store import MessageStore
+from lossless_agent.store.summary_store import SummaryStore
 from lossless_agent.tools.recall import (
     lcm_grep,
     lcm_describe,
@@ -20,6 +22,11 @@ from lossless_agent.tools.recall import (
     GrepResult,
     DescribeResult,
     ExpandResult,
+)
+from lossless_agent.tools.expand_query import (
+    ExpansionOrchestrator,
+    ExpandQueryConfig,
+    ExpandQueryResult,
 )
 from lossless_agent.store.models import Message, Summary
 
@@ -117,6 +124,27 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {},
             },
         ),
+        types.Tool(
+            name="lcm_expand_query",
+            description=(
+                "Run a sub-agent expansion query: searches the DAG, describes and "
+                "expands relevant summaries, then synthesizes an answer."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "conversation_id": {
+                        "type": "integer",
+                        "description": "Conversation ID to search within",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "The question to answer from past context",
+                    },
+                },
+                "required": ["conversation_id", "query"],
+            },
+        ),
     ]
 
 
@@ -146,6 +174,25 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         if result is None:
             return [types.TextContent(type="text", text=json.dumps({"error": "summary not found"}))]
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
+
+    elif name == "lcm_expand_query":
+        async def _passthrough_summarize(prompt: str) -> str:
+            return prompt
+
+        msg_store = MessageStore(_db)
+        sum_store = SummaryStore(_db)
+        orch = ExpansionOrchestrator(
+            db=_db,
+            msg_store=msg_store,
+            sum_store=sum_store,
+            expand_fn=_passthrough_summarize,
+        )
+        result = await orch.expand_query(
+            conversation_id=arguments["conversation_id"],
+            query=arguments["query"],
+        )
+        payload = _serialize(result)
+        return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
     elif name == "lcm_stats":
         conn = _db.conn

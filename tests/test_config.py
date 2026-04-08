@@ -28,12 +28,12 @@ class TestDefaults:
         cfg = LCMConfig.from_env()
         assert cfg.enabled is True
         assert cfg.db_path == "~/.lossless-agent/lcm.db"
-        assert cfg.fresh_tail_count == 8
+        assert cfg.fresh_tail_count == 64
         assert cfg.leaf_chunk_tokens == 20_000
-        assert cfg.leaf_min_fanout == 4
-        assert cfg.condensed_min_fanout == 3
+        assert cfg.leaf_min_fanout == 8
+        assert cfg.condensed_min_fanout == 4
         assert cfg.context_threshold == 0.75
-        assert cfg.leaf_target_tokens == 1200
+        assert cfg.leaf_target_tokens == 2400
         assert cfg.condensed_target_tokens == 2000
         assert cfg.max_context_tokens == 128_000
         assert cfg.summary_budget_ratio == 0.4
@@ -43,6 +43,19 @@ class TestDefaults:
         assert cfg.ignore_session_patterns == []
         assert cfg.incremental_max_depth == 1
         assert cfg.summary_timeout_ms == 60_000
+        assert cfg.circuit_breaker_cooldown_ms == 1_800_000
+        # New fields
+        assert cfg.stateless_session_patterns == []
+        assert cfg.skip_stateless_sessions is True
+        assert cfg.new_session_retain_depth == 2
+        assert cfg.bootstrap_max_tokens == 6000
+        assert cfg.large_file_summary_provider == ""
+        assert cfg.large_file_summary_model == ""
+        assert cfg.delegation_timeout_ms == 120_000
+        assert cfg.prune_heartbeat_ok is False
+        assert cfg.max_assembly_token_budget is None
+        assert cfg.custom_instructions == ""
+        assert cfg.timezone == ""
 
 
 # ------------------------------------------------------------------
@@ -190,7 +203,7 @@ class TestMerge:
     def test_does_not_mutate_base(self):
         base = LCMConfig()
         LCMConfig.merge(base, {"fresh_tail_count": 99})
-        assert base.fresh_tail_count == 8
+        assert base.fresh_tail_count == 64
 
 
 # ------------------------------------------------------------------
