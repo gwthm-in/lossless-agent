@@ -132,6 +132,42 @@ SQLite with WAL mode, FTS5 full-text search:
   counts, temporal range
 - **DAG edges**: parent-child relationships between summary nodes
 
+## Framework Integration
+
+Lossless Agent works with any MCP-compatible AI framework. Set up in under
+2 minutes:
+
+| Framework | Mode | Setup |
+|---|---|---|
+| **Claude Code** | MCP Server | Copy [`.mcp.json`](examples/claude_code_setup/.mcp.json) to project root |
+| **Cursor / Windsurf** | MCP Server | Add `lossless-agent-mcp` to MCP settings |
+| **Google ADK** | MCP Server | `McpToolset` + `StdioConnectionParams` ([example](examples/google_adk_setup.py)) |
+| **Anthropic SDK** | MCP Server | `MCPServerStdio` ([example](examples/anthropic_agents_setup.py)) |
+| **OpenClaw** | Python Adapter | `OpenClawAdapter` ([example](examples/openclaw_setup.py)) |
+| **Custom Agent** | Python Adapter | `GenericAdapter` ([example](examples/framework_integration.py)) |
+
+**Quick start (Claude Code):**
+
+```bash
+pip install lossless-agent
+```
+
+Then add `.mcp.json` to your project root:
+
+```json
+{
+  "mcpServers": {
+    "lossless-agent": {
+      "command": "lossless-agent-mcp",
+      "args": ["--db-path", "./data/lcm.db"]
+    }
+  }
+}
+```
+
+See [docs/framework-setup.md](docs/framework-setup.md) for complete setup
+guides for all frameworks.
+
 ## Language
 
 **Python** — because:
