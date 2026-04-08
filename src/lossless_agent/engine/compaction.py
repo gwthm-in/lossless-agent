@@ -17,6 +17,8 @@ from lossless_agent.store.abc import (
 )
 from lossless_agent.store.models import Message, Summary
 from lossless_agent.engine.media import MediaAnnotator
+from lossless_agent.engine.summarize_prompt import build_leaf_prompt, build_condensed_prompt
+
 logger = logging.getLogger(__name__)
 
 
@@ -338,15 +340,35 @@ class CompactionEngine:
     # Leaf compaction
     # ------------------------------------------------------------------
 
-    async def compact_leaf(self, conv_id: int) -> Optional[Summary]:
+    async def compact_leaf(
+        self, conv_id: int, previous_summary_content: str = "",
+    ) -> Optional[Summary]:
         """Run one leaf compaction pass: summarise a chunk of messages."""
         chunk = self.select_chunk(conv_id)
         if not chunk:
             return None
 
-        text = _format_messages(chunk)
+        messages_text = _format_messages(chunk)
+
+        # Resolve prior summary context if not provided
+        if not previous_summary_content:
+            previous_summary_content = resolve_prior_summary_context(
+                conversation_id=conv_id,
+                chunk_start_seq=chunk[0].seq,
+                summary_store=self._sum,
+                context_item_store=self._ctx,
+            )
+
+        # Build structured prompt with custom instructions + prior context
+        prompt = build_leaf_prompt(
+            messages_text=messages_text,
+            target_tokens=self.cfg.leaf_target_tokens,
+            custom_instructions=self.cfg.custom_instructions,
+            previous_summary=previous_summary_content,
+        )
+
         summary_text = await summarize_with_escalation(
-            text,
+            prompt,
             self._summarize,
             target_tokens=self.cfg.leaf_target_tokens,
             max_overage_factor=self.cfg.summary_max_overage_factor,
@@ -403,9 +425,18 @@ class CompactionEngine:
         orphan_set = set(orphan_ids)
         orphans = [s for s in all_at_depth if s.summary_id in orphan_set]
 
-        text = _format_summaries(orphans)
+        summaries_text = _format_summaries(orphans)
+
+        # Build structured prompt with depth-aware guidance + custom instructions
+        prompt = build_condensed_prompt(
+            summaries_text=summaries_text,
+            target_tokens=self.cfg.condensed_target_tokens,
+            depth=depth + 1,  # target depth of the new condensed summary
+            custom_instructions=self.cfg.custom_instructions,
+        )
+
         summary_text = await summarize_with_escalation(
-            text,
+            prompt,
             self._summarize,
             target_tokens=self.cfg.condensed_target_tokens,
             max_overage_factor=self.cfg.summary_max_overage_factor,
@@ -489,11 +520,14 @@ class CompactionEngine:
         created: List[Summary] = []
 
         # Phase 1: exhaust leaf compaction
+        # Chain previous_summary_content: each leaf pass's output feeds the next
+        previous_summary = ""
         while True:
-            leaf = await self.compact_leaf(conv_id)
+            leaf = await self.compact_leaf(conv_id, previous_summary_content=previous_summary)
             if leaf is None:
                 break
             created.append(leaf)
+            previous_summary = leaf.content  # chain for continuity
 
         # Phase 2: condensed at increasing depths
         depth = 0
