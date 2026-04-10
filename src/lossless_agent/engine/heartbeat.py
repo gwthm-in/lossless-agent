@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Protocol
+from typing import List, Protocol
 
 from lossless_agent.store.models import Message
 

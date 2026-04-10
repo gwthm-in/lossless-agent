@@ -1,7 +1,6 @@
 """Tests for the DelegationGuard scope-reduction invariant."""
 from __future__ import annotations
 
-import pytest
 
 from lossless_agent.engine.delegation_guard import DelegationGuard
 

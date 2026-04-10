@@ -1,12 +1,9 @@
 """Tests for heartbeat OK pruning."""
 from __future__ import annotations
 
-import pytest
 
 from lossless_agent.store.models import Message
 from lossless_agent.engine.heartbeat import (
-    HEARTBEAT_OK_TOKEN,
-    HEARTBEAT_TURN_MARKER,
     HeartbeatPruner,
 )
 

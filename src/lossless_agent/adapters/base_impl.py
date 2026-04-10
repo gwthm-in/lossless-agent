@@ -21,7 +21,6 @@ from lossless_agent.engine import (
     CompactionEngine,
     ContextAssembler,
     HeartbeatPruner,
-    LargeFileInterceptor,
     SessionPatternMatcher,
     StartupBanner,
 )

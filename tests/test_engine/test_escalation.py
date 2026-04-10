@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,12 +10,10 @@ from lossless_agent.engine.compaction import (
     CompactionConfig,
     CompactionEngine,
     LcmProviderAuthError,
-    SummarizerTimeoutError,
     _estimate_tokens,
     summarize_with_escalation,
 )
 from lossless_agent.engine.circuit_breaker import CircuitBreaker
-from lossless_agent.store.database import Database
 from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore

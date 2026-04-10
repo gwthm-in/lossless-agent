@@ -1,5 +1,4 @@
 """Tests for SessionPatternMatcher."""
-import pytest
 
 from lossless_agent.engine.session_patterns import SessionPatternMatcher
 

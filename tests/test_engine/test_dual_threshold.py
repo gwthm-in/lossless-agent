@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from lossless_agent.store.database import Database
 from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore

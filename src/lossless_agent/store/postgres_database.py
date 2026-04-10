@@ -8,7 +8,7 @@ work unchanged.
 from __future__ import annotations
 
 import re
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional
 
 import psycopg2
 import psycopg2.extensions

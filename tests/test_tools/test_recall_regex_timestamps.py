@@ -1,7 +1,6 @@
 """Tests for lcm_grep regex mode and timestamp filters (Feature 6)."""
 from __future__ import annotations
 
-import time
 
 import pytest
 
@@ -9,7 +8,7 @@ from lossless_agent.store.database import Database
 from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
-from lossless_agent.tools.recall import lcm_grep, GrepResult
+from lossless_agent.tools.recall import lcm_grep
 
 
 @pytest.fixture

@@ -4,7 +4,6 @@ import sqlite3
 
 import pytest
 
-from lossless_agent.store.database import Database
 
 
 # ---------------------------------------------------------------------------

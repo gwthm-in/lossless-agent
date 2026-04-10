@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from typing import List, Optional
+from typing import List
 
 
 class FTSSafety:

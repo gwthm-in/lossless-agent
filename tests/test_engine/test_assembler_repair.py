@@ -82,7 +82,7 @@ class TestAssembleCallsRepair:
         with patch("lossless_agent.engine.assembler.TranscriptRepairer") as MockRepairer:
             mock_instance = MockRepairer.return_value
             mock_instance.repair.return_value = tail  # pass through
-            result = assembler.assemble(conv_id=1)
+            assembler.assemble(conv_id=1)
             mock_instance.repair.assert_called_once_with(tail)
 
     def test_repair_not_called_when_disabled(self, msg_store, sum_store):
@@ -93,7 +93,7 @@ class TestAssembleCallsRepair:
         assembler = ContextAssembler(msg_store, sum_store, cfg)
 
         with patch("lossless_agent.engine.assembler.TranscriptRepairer") as MockRepairer:
-            result = assembler.assemble(conv_id=1)
+            assembler.assemble(conv_id=1)
             MockRepairer.return_value.repair.assert_not_called()
 
     def test_repaired_messages_used_in_result(self, msg_store, sum_store):

@@ -83,7 +83,7 @@ class TestPrefetch:
         """prefetch should auto-initialize if not yet initialized."""
         loop = asyncio.get_event_loop()
         # Don't call initialize() — prefetch should do it
-        result = loop.run_until_complete(provider.prefetch("new-session"))
+        loop.run_until_complete(provider.prefetch("new-session"))
         assert provider._initialized is True
 
 

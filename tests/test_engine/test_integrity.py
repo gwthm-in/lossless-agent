@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from lossless_agent.store.database import Database
-from lossless_agent.engine.integrity import CheckResult, IntegrityChecker
+from lossless_agent.engine.integrity import IntegrityChecker
 
 
 @pytest.fixture

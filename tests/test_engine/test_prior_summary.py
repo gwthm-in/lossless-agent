@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from lossless_agent.store.database import Database
 from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
@@ -45,7 +44,7 @@ class TestResolvePriorSummaryFallback:
     def test_returns_prior_leaf_summaries(self):
         msgs = _seed_messages(self.msg_store, self.conv.id, 10)
         # Create two leaf summaries
-        s1 = self.sum_store.create_leaf(
+        self.sum_store.create_leaf(
             conversation_id=self.conv.id,
             content="Summary A",
             token_count=5,
@@ -55,7 +54,7 @@ class TestResolvePriorSummaryFallback:
             latest_at=msgs[1].created_at,
             model="test",
         )
-        s2 = self.sum_store.create_leaf(
+        self.sum_store.create_leaf(
             conversation_id=self.conv.id,
             content="Summary B",
             token_count=5,

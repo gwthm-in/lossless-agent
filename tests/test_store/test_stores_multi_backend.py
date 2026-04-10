@@ -10,7 +10,7 @@ from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
 from lossless_agent.store.context_item_store import ContextItemStore
 from lossless_agent.store.message_part_store import MessagePartStore
-from lossless_agent.store.models import Conversation, Message, Summary, ContextItem, MessagePart
+from lossless_agent.store.models import Conversation, Message, Summary, MessagePart
 
 
 # ===========================================================================

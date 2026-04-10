@@ -1,11 +1,10 @@
 """Session bootstrap engine: seed a new conversation from a parent session."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from dataclasses import dataclass
+from typing import Callable
 
 from lossless_agent.store.database import Database
-from lossless_agent.store.models import Message, Summary
 
 
 @dataclass

@@ -46,7 +46,7 @@ class TranscriptRepairer:
         # Identify tool-call messages (assistant messages with a tool_call_id)
         # and tool-result messages (role='tool' with a tool_call_id).
         tool_call_ids = self._extract_tool_call_ids(msgs)
-        tool_result_ids = self._extract_tool_result_ids(msgs)
+        self._extract_tool_result_ids(msgs)
 
         # Step 1 + 3: Separate out tool results, de-dup, then re-insert
         # after their matching tool call.

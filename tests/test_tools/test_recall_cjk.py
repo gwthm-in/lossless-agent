@@ -1,7 +1,6 @@
 """Tests for CJK detection and search routing in tools/recall.py."""
 from __future__ import annotations
 
-import sqlite3
 
 import pytest
 

@@ -1,7 +1,6 @@
 """Context assembler: builds a budget-aware context from summaries and messages."""
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
 from dataclasses import dataclass

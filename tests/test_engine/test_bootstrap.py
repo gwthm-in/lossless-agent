@@ -197,7 +197,7 @@ class TestSessionBootstrap:
         )
 
         # Create condensed summary (depth 1)
-        condensed = stores["sum"].create_condensed(
+        stores["sum"].create_condensed(
             conversation_id=parent.id,
             content="High level condensed summary of everything",
             token_count=25,
@@ -218,7 +218,7 @@ class TestSessionBootstrap:
 
     def test_bootstrap_empty_parent(self, db, stores):
         """Bootstrap from a parent with no messages or summaries."""
-        parent = stores["conv"].get_or_create("parent:session")
+        stores["conv"].get_or_create("parent:session")
         new_conv = stores["conv"].get_or_create("new:session")
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize)
         result = asyncio.get_event_loop().run_until_complete(

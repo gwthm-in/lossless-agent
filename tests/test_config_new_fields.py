@@ -1,9 +1,7 @@
 """Tests for new LCMConfig fields (Feature 4)."""
 from __future__ import annotations
 
-import os
 
-import pytest
 
 from lossless_agent.config import LCMConfig
 

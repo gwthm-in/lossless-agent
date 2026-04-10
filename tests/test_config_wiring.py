@@ -67,7 +67,6 @@ class TestSummaryModelProvider:
         from lossless_agent.engine.startup_banner import StartupBanner
         cfg = LCMConfig(summary_model="gpt-4o", summary_provider="openai")
         StartupBanner.reset()
-        messages = []
         StartupBanner.log_compaction_model(cfg)
         # Just verify it doesn't crash and reads the fields
         assert cfg.summary_model == "gpt-4o"

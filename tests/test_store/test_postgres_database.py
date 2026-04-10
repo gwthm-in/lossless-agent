@@ -1,5 +1,4 @@
 """Tests for PostgresDatabase – RED phase: these should FAIL until implementation exists."""
-import os
 
 import pytest
 

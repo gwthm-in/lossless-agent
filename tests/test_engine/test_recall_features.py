@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from lossless_agent.store.database import Database
 from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
@@ -176,7 +175,7 @@ class TestLcmGrepGrouping:
     def test_grouped_ungrouped_messages(self):
         result = lcm_grep(self.db, "grouped test", scope="messages", grouped=True)
         # Messages 4-5 are not covered by any summary
-        ungrouped_ids = {r.id for r in result.ungrouped}
+        {r.id for r in result.ungrouped}
         # At least some messages should be ungrouped
         assert len(result.ungrouped) >= 0  # may be 0 if search doesn't find them
 

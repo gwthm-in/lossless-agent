@@ -50,7 +50,7 @@ class TestReorder:
             _msg(3, role="assistant", content="call A", tool_call_id="tc_1", tool_name="fn"),
         ]
         result = repairer.repair(msgs)
-        roles = [(m.role, m.tool_call_id) for m in result]
+        [(m.role, m.tool_call_id) for m in result]
         # assistant call should come before tool result
         call_idx = next(i for i, m in enumerate(result) if m.role == "assistant" and m.tool_call_id == "tc_1")
         result_idx = next(i for i, m in enumerate(result) if m.role == "tool" and m.tool_call_id == "tc_1")
@@ -154,7 +154,7 @@ class TestCombined:
         result = repairer.repair(msgs)
 
         # Check ordering
-        roles_ids = [(m.role, m.tool_call_id) for m in result]
+        [(m.role, m.tool_call_id) for m in result]
 
         # tc_1 call should be followed by its result
         tc1_call_idx = next(

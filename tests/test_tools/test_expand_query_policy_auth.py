@@ -8,9 +8,8 @@ import pytest
 from lossless_agent.engine.expansion_auth import (
     ExpansionAuthManager,
     InvalidGrantError,
-    ExhaustedBudgetError,
 )
-from lossless_agent.engine.expansion_policy import ExpansionPolicy, PolicyAction
+from lossless_agent.engine.expansion_policy import ExpansionPolicy
 from lossless_agent.store.database import Database
 from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore

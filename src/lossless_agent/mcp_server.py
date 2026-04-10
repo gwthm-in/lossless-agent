@@ -13,8 +13,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import subprocess
-import sys
 from dataclasses import asdict
 from typing import Any, Optional
 
@@ -26,22 +24,16 @@ from lossless_agent.store.database import Database
 from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
-from lossless_agent.engine.compaction import CompactionEngine, CompactionConfig, SummarizeFn
+from lossless_agent.engine.compaction import CompactionEngine, SummarizeFn
 from lossless_agent.engine.assembler import ContextAssembler, AssemblerConfig
 from lossless_agent.tools.recall import (
     lcm_grep,
     lcm_describe,
     lcm_expand,
-    GrepResult,
-    DescribeResult,
-    ExpandResult,
 )
 from lossless_agent.tools.expand_query import (
     ExpansionOrchestrator,
-    ExpandQueryConfig,
-    ExpandQueryResult,
 )
-from lossless_agent.store.models import Message, Summary
 
 server = Server("lossless-agent")
 _db: Database | None = None

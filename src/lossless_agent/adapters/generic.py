@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 from typing import Callable, Awaitable, Dict, List, Optional
 
-from lossless_agent.adapters.base import LCMConfig
 from lossless_agent.adapters.base_impl import BaseAdapter
 
 SummarizeFn = Callable[[str], Awaitable[str]]
