@@ -50,9 +50,28 @@ class VectorStore:
         return self._conn
 
     def _ensure_schema(self) -> None:
+        # Step 1: try to create the extension.
+        # On managed Postgres (RDS, Supabase, etc.) this requires SUPERUSER;
+        # the extension is typically pre-installed by the platform admin.
+        # We attempt it in an isolated transaction so a failure doesn't
+        # poison subsequent DDL.
         cur = self._conn.cursor()
         try:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            self._conn.commit()
+        except Exception as exc:
+            self._conn.rollback()
+            logger.debug(
+                "CREATE EXTENSION vector failed (%s) — assuming extension is "
+                "already installed by a superuser",
+                exc,
+            )
+        finally:
+            cur.close()
+
+        # Step 2: create the table (requires the extension to be present).
+        cur = self._conn.cursor()
+        try:
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS summary_embeddings (
@@ -69,10 +88,21 @@ class VectorStore:
                 ON summary_embeddings(conversation_id)
                 """
             )
-            # HNSW index for fast approximate nearest-neighbour search
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+        # Step 3: HNSW index (pgvector >= 0.5.0).  Fall back to IVFFlat on
+        # older versions — both support vector_cosine_ops; IVFFlat just
+        # requires a pre-built list count.
+        cur = self._conn.cursor()
+        try:
             cur.execute(
                 """
-                CREATE INDEX IF NOT EXISTS summary_embeddings_hnsw_idx
+                CREATE INDEX IF NOT EXISTS summary_embeddings_ann_idx
                 ON summary_embeddings
                 USING hnsw (embedding vector_cosine_ops)
                 WITH (m = 16, ef_construction = 64)
@@ -81,7 +111,27 @@ class VectorStore:
             self._conn.commit()
         except Exception:
             self._conn.rollback()
-            raise
+            logger.debug("HNSW index unavailable (pgvector < 0.5?), trying IVFFlat")
+            cur2 = self._conn.cursor()
+            try:
+                cur2.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS summary_embeddings_ann_idx
+                    ON summary_embeddings
+                    USING ivfflat (embedding vector_cosine_ops)
+                    WITH (lists = 100)
+                    """
+                )
+                self._conn.commit()
+            except Exception as exc2:
+                self._conn.rollback()
+                logger.warning(
+                    "Could not create ANN index on summary_embeddings: %s — "
+                    "search will fall back to exact scan",
+                    exc2,
+                )
+            finally:
+                cur2.close()
         finally:
             cur.close()
 

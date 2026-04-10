@@ -67,7 +67,7 @@ def make_embedder(config: "LCMConfig") -> Optional[EmbedFn]:
     api_key = config.embedding_api_key
 
     async def _embed(text: str) -> List[float]:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             _http_embed,
