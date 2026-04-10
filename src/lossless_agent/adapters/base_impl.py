@@ -13,7 +13,8 @@ from typing import Callable, Awaitable, List, Optional
 
 from lossless_agent.adapters.base import AgentAdapter, LCMConfig
 from lossless_agent.store import (
-    Database, ConversationStore, ContextItemStore, MessageStore, SummaryStore,
+    ConversationStore, ContextItemStore, MessageStore, SummaryStore,
+    create_database,
 )
 from lossless_agent.engine import (
     CircuitBreaker,
@@ -59,7 +60,7 @@ class BaseAdapter(AgentAdapter):
         self._summarize_fn = summarize_fn
 
         # --- Core stores ---
-        self._db = Database(config.db_path)
+        self._db = create_database(config)
         self._conv_store = ConversationStore(self._db)
         self._msg_store = MessageStore(self._db)
         self._sum_store = SummaryStore(self._db)

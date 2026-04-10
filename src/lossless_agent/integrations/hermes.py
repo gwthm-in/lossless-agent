@@ -36,6 +36,7 @@ from typing import Any, Callable, Awaitable, Dict, List, Optional
 from lossless_agent.config import LCMConfig
 from lossless_agent.store import (
     Database, ConversationStore, ContextItemStore, MessageStore, SummaryStore,
+    create_database,
 )
 from lossless_agent.engine import (
     CircuitBreaker,
@@ -202,8 +203,11 @@ class LosslessMemoryProvider:
         if self._initialized:
             return
 
-        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
-        self._db = Database(self._db_path)
+        if not self._config.database_dsn:
+            db_dir = os.path.dirname(self._db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+        self._db = create_database(self._config)
         self._conv_store = ConversationStore(self._db)
         self._msg_store = MessageStore(self._db)
         self._sum_store = SummaryStore(self._db)

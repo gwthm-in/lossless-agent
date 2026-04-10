@@ -69,6 +69,7 @@ class LCMConfig:
     max_assembly_token_budget: Optional[int] = None
     custom_instructions: str = ""
     timezone: str = ""
+    database_dsn: str = ""  # Postgres DSN, e.g. postgresql://user:pass@host/db
 
     # ------------------------------------------------------------------
     # Env-var mapping
@@ -109,6 +110,7 @@ class LCMConfig:
         "max_assembly_token_budget": ("LCM_MAX_ASSEMBLY_TOKEN_BUDGET", _parse_optional_int),
         "custom_instructions": ("LCM_CUSTOM_INSTRUCTIONS", str),
         "timezone": ("LCM_TIMEZONE", str),
+        "database_dsn": ("LCM_DATABASE_DSN", str),
     }
 
     # ------------------------------------------------------------------

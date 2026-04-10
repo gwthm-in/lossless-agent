@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_conv_seq_idx ON messages(conversation_id, seq);
 
+-- GIN index for full-text search on messages
+CREATE INDEX IF NOT EXISTS messages_fts_idx
+    ON messages USING gin(to_tsvector('english', content));
+
 -- Summaries (DAG nodes)
 CREATE TABLE IF NOT EXISTS summaries (
     summary_id              TEXT    PRIMARY KEY,

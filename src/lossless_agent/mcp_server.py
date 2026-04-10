@@ -21,6 +21,8 @@ from mcp.server.stdio import stdio_server
 import mcp.types as types
 
 from lossless_agent.store.database import Database
+from lossless_agent.store.factory import create_database
+from lossless_agent.config import LCMConfig
 from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
@@ -560,9 +562,10 @@ async def _handle_session_end(arguments: dict) -> list[types.TextContent]:
 # Main
 # ------------------------------------------------------------------
 
-async def main(db_path: str) -> None:
+async def main(db_path: str, db_dsn: str = "") -> None:
     global _db
-    _db = Database(db_path)
+    cfg = LCMConfig(db_path=db_path, database_dsn=db_dsn)
+    _db = create_database(cfg)
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
@@ -578,8 +581,17 @@ def cli() -> None:
     parser = argparse.ArgumentParser(description="LCM MCP Server (stdio transport)")
     parser.add_argument(
         "--db-path",
-        required=True,
-        help="Path to the lossless-agent SQLite database",
+        default="~/.lossless-agent/lcm.db",
+        help="Path to the lossless-agent SQLite database (ignored when --db-dsn is set)",
+    )
+    parser.add_argument(
+        "--db-dsn",
+        default="",
+        help=(
+            "PostgreSQL DSN, e.g. postgresql://user:pass@host/dbname. "
+            "When set, Postgres is used instead of SQLite. "
+            "Requires: pip install 'lossless-agent[postgres]'"
+        ),
     )
     parser.add_argument(
         "--summarize-command",
@@ -593,7 +605,7 @@ def cli() -> None:
     args = parser.parse_args()
     global _summarize_command
     _summarize_command = args.summarize_command
-    asyncio.run(main(args.db_path))
+    asyncio.run(main(args.db_path, db_dsn=args.db_dsn))
 
 
 if __name__ == "__main__":
