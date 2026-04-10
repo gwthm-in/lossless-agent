@@ -5,7 +5,11 @@ import asyncio
 import enum
 import logging
 from dataclasses import dataclass
-from typing import Callable, Awaitable, List, Optional
+from typing import TYPE_CHECKING, Callable, Awaitable, List, Optional
+
+if TYPE_CHECKING:
+    from lossless_agent.store.vector_store import VectorStore
+    from lossless_agent.engine.embedder import EmbedFn
 
 from lossless_agent.store.abc import (
     AbstractContextItemStore,
@@ -265,6 +269,8 @@ class CompactionEngine:
         config: CompactionConfig | None = None,
         circuit_breaker: "CircuitBreaker | None" = None,
         context_item_store: AbstractContextItemStore | None = None,
+        embed_fn: "EmbedFn | None" = None,
+        vector_store: "VectorStore | None" = None,
     ) -> None:
         self._msg = msg_store
         self._sum = sum_store
@@ -272,6 +278,28 @@ class CompactionEngine:
         self.cfg = config or CompactionConfig()
         self._cb = circuit_breaker
         self._ctx = context_item_store
+        self._embed_fn = embed_fn
+        self._vector_store = vector_store
+
+    # ------------------------------------------------------------------
+    # Embedding helper
+    # ------------------------------------------------------------------
+
+    async def _maybe_embed(self, summary: Summary) -> None:
+        """Embed a summary node and store in vector_store if configured."""
+        if self._embed_fn is None or self._vector_store is None:
+            return
+        try:
+            embedding = await self._embed_fn(summary.content)
+            self._vector_store.store(
+                summary.summary_id, summary.conversation_id, embedding
+            )
+        except Exception:
+            logger.warning(
+                "Failed to embed summary %s — cross-session search may be incomplete",
+                summary.summary_id,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Chunk selection
@@ -398,6 +426,7 @@ class CompactionEngine:
                 conv_id_str, msg_id_strs, summary.summary_id, new_ordinal
             )
 
+        await self._maybe_embed(summary)
         return summary
 
     # ------------------------------------------------------------------
@@ -453,6 +482,7 @@ class CompactionEngine:
             latest_at=orphans[-1].latest_at,
             model="compaction",
         )
+        await self._maybe_embed(summary)
         return summary
 
     # ------------------------------------------------------------------

@@ -21,6 +21,12 @@ try:
 except ImportError:
     PostgresDatabase = None  # type: ignore[misc,assignment]
 
+# pgvector semantic store (optional – requires psycopg2 + pgvector extension)
+try:
+    from .vector_store import VectorStore
+except ImportError:
+    VectorStore = None  # type: ignore[misc,assignment]
+
 __all__ = [
     "AbstractConversationStore",
     "AbstractContextItemStore",
@@ -29,6 +35,7 @@ __all__ = [
     "AbstractSummaryStore",
     "Database",
     "PostgresDatabase",
+    "VectorStore",
     "create_database",
     "ContextItemStore",
     "ConversationStore",

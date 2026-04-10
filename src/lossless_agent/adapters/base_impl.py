@@ -25,6 +25,7 @@ from lossless_agent.engine import (
     SessionPatternMatcher,
     StartupBanner,
 )
+from lossless_agent.engine.embedder import EmbedFn, make_embedder
 from lossless_agent.tools import lcm_grep, lcm_describe, lcm_expand
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,17 @@ class BaseAdapter(AgentAdapter):
             cooldown_ms=config.circuit_breaker_cooldown_ms,
         )
 
+        # --- Semantic layer (optional, requires pgvector + database_dsn) ---
+        self._embed_fn: Optional[EmbedFn] = make_embedder(config)
+        self._vector_store = None
+        if self._embed_fn is not None and config.database_dsn:
+            try:
+                from lossless_agent.store.vector_store import VectorStore
+                self._vector_store = VectorStore(config.database_dsn, dim=config.embedding_dim)
+            except Exception:
+                logger.warning("Failed to initialise VectorStore — cross-session disabled", exc_info=True)
+                self._embed_fn = None
+
         # --- Compaction engine (with circuit breaker + context item store) ---
         self._engine = CompactionEngine(
             self._msg_store,
@@ -80,6 +92,8 @@ class BaseAdapter(AgentAdapter):
             config.compaction,
             circuit_breaker=self._circuit_breaker,
             context_item_store=self._ctx_store,
+            embed_fn=self._embed_fn,
+            vector_store=self._vector_store,
         )
 
         # --- Assembler ---
@@ -149,11 +163,29 @@ class BaseAdapter(AgentAdapter):
             StartupBanner.log_session_patterns(self._config)
             self._banner_emitted = True
 
-        assembled = self._assembler.assemble(conv.id)
-        if not assembled.summaries and not assembled.messages:
-            return None
-        context = self._assembler.format_context(assembled)
-        return context if context.strip() else None
+        assembled = self._assembler.assemble(conv.id, prompt=user_message)
+        in_session = self._assembler.format_context(assembled) if (
+            assembled.summaries or assembled.messages
+        ) else ""
+
+        # Cross-session semantic search
+        cross_session = ""
+        if self._embed_fn is not None and self._vector_store is not None and user_message:
+            try:
+                embedding = await self._embed_fn(user_message)
+                cross_session = await self._assembler.cross_session_context(
+                    embedding,
+                    conv.id,
+                    self._vector_store,
+                    top_k=self._config.cross_session_top_k,
+                    token_budget=self._config.cross_session_token_budget,
+                )
+            except Exception:
+                logger.warning("Cross-session search failed", exc_info=True)
+
+        parts = [p for p in (cross_session, in_session) if p.strip()]
+        combined = "\n\n".join(parts)
+        return combined if combined.strip() else None
 
     async def on_turn_end(
         self, session_key: str, messages: List[dict]
