@@ -13,7 +13,7 @@ from typing import Callable, Awaitable, List, Optional
 
 from lossless_agent.adapters.base import AgentAdapter, LCMConfig
 from lossless_agent.store import (
-    Database, ConversationStore, ContextItemStore, MessageStore, SummaryStore,
+    ConversationStore, ContextItemStore, MessageStore, SummaryStore,
     create_database,
 )
 from lossless_agent.engine import (

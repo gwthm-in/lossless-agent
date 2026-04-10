@@ -204,7 +204,9 @@ class LosslessMemoryProvider:
             return
 
         if not self._config.database_dsn:
-            os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+            db_dir = os.path.dirname(self._db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
         self._db = create_database(self._config)
         self._conv_store = ConversationStore(self._db)
         self._msg_store = MessageStore(self._db)

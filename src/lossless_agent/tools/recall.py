@@ -1,6 +1,7 @@
 """Recall tools for searching and navigating the memory DAG."""
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
@@ -8,6 +9,8 @@ from typing import Any, Dict, List, Optional, Union
 from lossless_agent.engine.fts_safety import FTSSafety
 from lossless_agent.store.database import Database
 from lossless_agent.store.models import Message, Summary
+
+logger = logging.getLogger(__name__)
 
 
 # ── CJK detection & FTS5 safety (delegated to FTSSafety) ──────────
@@ -164,53 +167,6 @@ def _like_search(
     return results
 
 
-def _pg_fts_search_messages(
-    db: Database,
-    query: str,
-    conversation_id: Optional[int],
-    limit: int,
-    since: Optional[str] = None,
-    before: Optional[str] = None,
-) -> List[GrepResult]:
-    """Search messages via tsvector on Postgres with LIKE fallback."""
-    try:
-        sql = (
-            "SELECT id, conversation_id, content, role, seq, created_at "
-            "FROM messages "
-            "WHERE to_tsvector('english', coalesce(content, '')) @@ plainto_tsquery('english', ?)"
-        )
-        params: list = [query]
-        if conversation_id is not None:
-            sql += " AND conversation_id = ?"
-            params.append(conversation_id)
-        if since is not None:
-            sql += " AND created_at >= ?"
-            params.append(since)
-        if before is not None:
-            sql += " AND created_at < ?"
-            params.append(before)
-        sql += (
-            " ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), "
-            "plainto_tsquery('english', ?)) DESC LIMIT ?"
-        )
-        params.extend([query, limit])
-        results: List[GrepResult] = []
-        for row in db.conn.execute(sql, params).fetchall():
-            results.append(
-                GrepResult(
-                    type="message",
-                    id=row[0],
-                    content_snippet=_truncate(row[2]),
-                    conversation_id=row[1],
-                    metadata={"role": row[3], "seq": row[4]},
-                    created_at=row[5],
-                )
-            )
-        return results
-    except Exception:
-        return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
-
-
 def _fts_search_messages(
     db: Database,
     query: str,
@@ -220,36 +176,56 @@ def _fts_search_messages(
     before: Optional[str] = None,
 ) -> List[GrepResult]:
     """Search messages via FTS5 (SQLite) or tsvector (Postgres) with LIKE fallback."""
-    if getattr(db, "backend", "sqlite") == "postgres":
-        return _pg_fts_search_messages(db, query, conversation_id, limit, since=since, before=before)
+    is_postgres = getattr(db, "backend", "sqlite") == "postgres"
 
-    # CJK: default FTS5 tokenizer can't handle CJK, use LIKE directly
-    if _contains_cjk(query):
-        return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
+    if not is_postgres:
+        # CJK: default FTS5 tokenizer can't handle CJK, use LIKE directly
+        if _contains_cjk(query):
+            return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
 
-    safe_query = _sanitize_fts5_query(query)
-    if not safe_query:
-        return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
+        safe_query = _sanitize_fts5_query(query)
+        if not safe_query:
+            return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
 
     try:
-        sql = (
-            "SELECT m.id, m.conversation_id, m.content, m.role, m.seq, m.created_at "
-            "FROM messages m "
-            "JOIN messages_fts f ON m.id = f.rowid "
-            "WHERE messages_fts MATCH ?"
-        )
-        params: list = [safe_query]
+        if is_postgres:
+            sql = (
+                "SELECT id, conversation_id, content, role, seq, created_at "
+                "FROM messages "
+                "WHERE to_tsvector('english', coalesce(content, '')) @@ plainto_tsquery('english', ?)"
+            )
+            params: list = [query]
+        else:
+            sql = (
+                "SELECT m.id, m.conversation_id, m.content, m.role, m.seq, m.created_at "
+                "FROM messages m "
+                "JOIN messages_fts f ON m.id = f.rowid "
+                "WHERE messages_fts MATCH ?"
+            )
+            params = [safe_query]
+
         if conversation_id is not None:
-            sql += " AND m.conversation_id = ?"
+            prefix = "" if is_postgres else "m."
+            sql += f" AND {prefix}conversation_id = ?"
             params.append(conversation_id)
         if since is not None:
-            sql += " AND m.created_at >= ?"
+            prefix = "" if is_postgres else "m."
+            sql += f" AND {prefix}created_at >= ?"
             params.append(since)
         if before is not None:
-            sql += " AND m.created_at < ?"
+            prefix = "" if is_postgres else "m."
+            sql += f" AND {prefix}created_at < ?"
             params.append(before)
-        sql += " ORDER BY f.rank LIMIT ?"
-        params.append(limit)
+
+        if is_postgres:
+            sql += (
+                " ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), "
+                "plainto_tsquery('english', ?)) DESC LIMIT ?"
+            )
+            params.extend([query, limit])
+        else:
+            sql += " ORDER BY f.rank LIMIT ?"
+            params.append(limit)
 
         results: List[GrepResult] = []
         for row in db.conn.execute(sql, params).fetchall():
@@ -264,55 +240,9 @@ def _fts_search_messages(
                 )
             )
         return results
-    except Exception:
+    except Exception as exc:
+        logger.debug("FTS search failed, falling back to LIKE: %s", exc)
         return _like_search(db, "messages", query, conversation_id, limit, "message", since=since, before=before)
-
-
-def _pg_fts_search_summaries(
-    db: Database,
-    query: str,
-    conversation_id: Optional[int],
-    limit: int,
-    since: Optional[str] = None,
-    before: Optional[str] = None,
-) -> List[GrepResult]:
-    """Search summaries via tsvector on Postgres with LIKE fallback."""
-    try:
-        sql = (
-            "SELECT summary_id, conversation_id, content, kind, depth, created_at "
-            "FROM summaries "
-            "WHERE to_tsvector('english', coalesce(content, '')) @@ plainto_tsquery('english', ?)"
-        )
-        params: list = [query]
-        if conversation_id is not None:
-            sql += " AND conversation_id = ?"
-            params.append(conversation_id)
-        if since is not None:
-            sql += " AND created_at >= ?"
-            params.append(since)
-        if before is not None:
-            sql += " AND created_at < ?"
-            params.append(before)
-        sql += (
-            " ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), "
-            "plainto_tsquery('english', ?)) DESC LIMIT ?"
-        )
-        params.extend([query, limit])
-        results: List[GrepResult] = []
-        for row in db.conn.execute(sql, params).fetchall():
-            results.append(
-                GrepResult(
-                    type="summary",
-                    id=row[0],
-                    content_snippet=_truncate(row[2]),
-                    conversation_id=row[1],
-                    metadata={"kind": row[3], "depth": row[4]},
-                    created_at=row[5],
-                )
-            )
-        return results
-    except Exception:
-        return _like_search(db, "summaries", query, conversation_id, limit, "summary", since=since, before=before)
 
 
 def _fts_search_summaries(
@@ -324,11 +254,50 @@ def _fts_search_summaries(
     before: Optional[str] = None,
 ) -> List[GrepResult]:
     """Search summaries via FTS5 (SQLite) or tsvector (Postgres), routing CJK to trigram table with LIKE fallback."""
-    if getattr(db, "backend", "sqlite") == "postgres":
-        return _pg_fts_search_summaries(db, query, conversation_id, limit, since=since, before=before)
+    is_postgres = getattr(db, "backend", "sqlite") == "postgres"
 
+    if is_postgres:
+        try:
+            sql = (
+                "SELECT summary_id, conversation_id, content, kind, depth, created_at "
+                "FROM summaries "
+                "WHERE to_tsvector('english', coalesce(content, '')) @@ plainto_tsquery('english', ?)"
+            )
+            params: list = [query]
+            if conversation_id is not None:
+                sql += " AND conversation_id = ?"
+                params.append(conversation_id)
+            if since is not None:
+                sql += " AND created_at >= ?"
+                params.append(since)
+            if before is not None:
+                sql += " AND created_at < ?"
+                params.append(before)
+            sql += (
+                " ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), "
+                "plainto_tsquery('english', ?)) DESC LIMIT ?"
+            )
+            params.extend([query, limit])
+            results: List[GrepResult] = []
+            for row in db.conn.execute(sql, params).fetchall():
+                results.append(
+                    GrepResult(
+                        type="summary",
+                        id=row[0],
+                        content_snippet=_truncate(row[2]),
+                        conversation_id=row[1],
+                        metadata={"kind": row[3], "depth": row[4]},
+                        created_at=row[5],
+                    )
+                )
+            return results
+        except Exception as exc:
+            logger.debug("FTS search failed, falling back to LIKE: %s", exc)
+            return _like_search(db, "summaries", query, conversation_id, limit, "summary", since=since, before=before)
+
+    # SQLite path
     is_cjk = _contains_cjk(query)
-    results: List[GrepResult] = []
+    results = []
 
     try:
         if is_cjk:
@@ -339,7 +308,7 @@ def _fts_search_summaries(
                 "JOIN summaries_fts_cjk fc ON s.summary_id = fc.summary_id "
                 "WHERE summaries_fts_cjk MATCH ?"
             )
-            params: list = [query]
+            params = [query]
         else:
             safe_query = _sanitize_fts5_query(query)
             if not safe_query:
@@ -379,8 +348,8 @@ def _fts_search_summaries(
         # fall through to LIKE
         if results or not is_cjk:
             return results
-    except Exception:
-        pass  # fall through to LIKE
+    except Exception as exc:
+        logger.debug("FTS search failed, falling back to LIKE: %s", exc)
 
     # LIKE fallback
     return _like_search(db, "summaries", query, conversation_id, limit, "summary", since=since, before=before)
