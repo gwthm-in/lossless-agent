@@ -4,7 +4,10 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from lossless_agent.store.vector_store import VectorStore
 
 from lossless_agent.store.abc import AbstractMessageStore, AbstractSummaryStore
 from lossless_agent.store.models import Message, Summary
@@ -254,6 +257,49 @@ class ContextAssembler:
         return AssembledContext(
             summaries=included, messages=final_messages, total_tokens=total
         )
+
+    async def cross_session_context(
+        self,
+        query_embedding: List[float],
+        current_conv_id: int,
+        vector_store: "VectorStore",
+        top_k: int = 5,
+        token_budget: int = 2000,
+        min_score: float = 0.70,
+    ) -> str:
+        """Search other conversations for semantically similar summaries.
+
+        Uses cosine similarity via pgvector to find summaries from past
+        sessions that are relevant to the current query. Results are
+        formatted as ``<cross_session_memory>`` blocks for injection into
+        the user message (separate from the current-session context).
+
+        Returns an empty string when no relevant cross-session memories
+        are found or when vector_store returns no hits.
+        """
+        hits = vector_store.search(
+            query_embedding, top_k=top_k, exclude_conversation_id=current_conv_id
+        )
+        if not hits:
+            return ""
+
+        parts: List[str] = []
+        tokens_used = 0
+        for summary_id, score in hits:
+            if score < min_score:
+                continue
+            s = self._sum.get_by_id(summary_id)
+            if s is None:
+                continue
+            if tokens_used + s.token_count > token_budget:
+                continue
+            parts.append(
+                f"<cross_session_memory id='{s.summary_id}' score={score:.3f}>"
+                f"\n{s.content}\n</cross_session_memory>"
+            )
+            tokens_used += s.token_count
+
+        return "\n".join(parts)
 
     def format_context(self, assembled: AssembledContext) -> str:
         """Format an AssembledContext into a string for the LLM.

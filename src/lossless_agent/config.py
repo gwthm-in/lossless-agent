@@ -71,6 +71,16 @@ class LCMConfig:
     timezone: str = ""
     database_dsn: str = ""  # Postgres DSN, e.g. postgresql://user:pass@host/db
 
+    # Semantic / cross-session retrieval (requires pgvector + database_dsn)
+    cross_session_enabled: bool = False
+    embedding_base_url: str = ""   # OpenAI-compatible /embeddings base URL
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dim: int = 1536
+    embedding_api_key: str = ""    # API key; falls back to OPENAI_API_KEY env var
+    cross_session_top_k: int = 5
+    cross_session_token_budget: int = 2000
+    cross_session_min_score: float = 0.70  # discard hits below this cosine similarity
+
     # ------------------------------------------------------------------
     # Env-var mapping
     # ------------------------------------------------------------------
@@ -111,6 +121,14 @@ class LCMConfig:
         "custom_instructions": ("LCM_CUSTOM_INSTRUCTIONS", str),
         "timezone": ("LCM_TIMEZONE", str),
         "database_dsn": ("LCM_DATABASE_DSN", str),
+        "cross_session_enabled": ("LCM_CROSS_SESSION_ENABLED", _parse_bool),
+        "embedding_base_url": ("LCM_EMBEDDING_BASE_URL", str),
+        "embedding_model": ("LCM_EMBEDDING_MODEL", str),
+        "embedding_dim": ("LCM_EMBEDDING_DIM", int),
+        "embedding_api_key": ("LCM_EMBEDDING_API_KEY", str),
+        "cross_session_top_k": ("LCM_CROSS_SESSION_TOP_K", int),
+        "cross_session_token_budget": ("LCM_CROSS_SESSION_TOKEN_BUDGET", int),
+        "cross_session_min_score": ("LCM_CROSS_SESSION_MIN_SCORE", float),
     }
 
     # ------------------------------------------------------------------
@@ -134,6 +152,11 @@ class LCMConfig:
                 ]
             else:
                 kwargs[field_name] = converter(raw)  # type: ignore[operator]
+        # embedding_api_key falls back to OPENAI_API_KEY when not explicitly set
+        if "embedding_api_key" not in kwargs:
+            openai_key = os.environ.get("OPENAI_API_KEY", "")
+            if openai_key:
+                kwargs["embedding_api_key"] = openai_key
         return cls(**kwargs)
 
     @classmethod

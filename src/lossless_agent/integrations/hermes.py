@@ -47,6 +47,7 @@ from lossless_agent.engine import (
     SessionPatternMatcher,
     StartupBanner,
 )
+from lossless_agent.engine.embedder import EmbedFn, make_embedder
 from lossless_agent.tools import lcm_grep, lcm_describe, lcm_expand
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,8 @@ class LosslessMemoryProvider:
         self._session_matcher: Optional[SessionPatternMatcher] = None
         self._heartbeat_pruner: Optional[HeartbeatPruner] = None
         self._compaction_prompt = CompactionAwarePrompt()
+        self._embed_fn: Optional[EmbedFn] = None
+        self._vector_store = None
         self._initialized = False
 
     # ------------------------------------------------------------------
@@ -218,6 +221,22 @@ class LosslessMemoryProvider:
             cooldown_ms=self._config.circuit_breaker_cooldown_ms,
         )
 
+        # Semantic layer (optional)
+        self._embed_fn = make_embedder(self._config)
+        self._vector_store = None
+        if self._embed_fn is not None and self._config.database_dsn:
+            try:
+                from lossless_agent.store.vector_store import VectorStore
+                self._vector_store = VectorStore(
+                    self._config.database_dsn, dim=self._config.embedding_dim
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to initialise VectorStore — cross-session disabled",
+                    exc_info=True,
+                )
+                self._embed_fn = None
+
         self._engine = CompactionEngine(
             self._msg_store,
             self._sum_store,
@@ -225,6 +244,8 @@ class LosslessMemoryProvider:
             self._config.compaction,
             circuit_breaker=cb,
             context_item_store=self._ctx_store,
+            embed_fn=self._embed_fn,
+            vector_store=self._vector_store,
         )
 
         self._assembler = ContextAssembler(
@@ -271,20 +292,34 @@ class LosslessMemoryProvider:
         conv = self._conv_store.get_or_create(session_key)
         assembled = self._assembler.assemble(conv.id, prompt=query)
 
-        if not assembled.summaries and not assembled.messages:
-            return None
+        in_session = ""
+        if assembled.summaries or assembled.messages:
+            in_session = self._assembler.format_context(assembled)
 
-        context = self._assembler.format_context(assembled)
-        if not context.strip():
-            return None
+        # Cross-session semantic search
+        cross_session = ""
+        if self._embed_fn is not None and self._vector_store is not None and query:
+            try:
+                embedding = await self._embed_fn(query)
+                cross_session = await self._assembler.cross_session_context(
+                    embedding,
+                    conv.id,
+                    self._vector_store,
+                    top_k=self._config.cross_session_top_k,
+                    token_budget=self._config.cross_session_token_budget,
+                    min_score=self._config.cross_session_min_score,
+                )
+            except Exception:
+                logger.warning("Cross-session search failed", exc_info=True)
 
         # Add dynamic compaction warning if heavily compacted
         summaries = self._sum_store.get_by_conversation(conv.id)
         compaction_note = self._compaction_prompt.generate(summaries)
-        if compaction_note:
-            context = compaction_note + "\n\n" + context
 
-        return context
+        parts = [p for p in (compaction_note or "", cross_session, in_session) if p.strip()]
+        if not parts:
+            return None
+        return "\n\n".join(parts)
 
     async def sync_turn(
         self,
@@ -392,7 +427,10 @@ class LosslessMemoryProvider:
     # ------------------------------------------------------------------
 
     async def shutdown(self) -> None:
-        """Close database connection."""
+        """Close database connections."""
+        if self._vector_store is not None:
+            self._vector_store.close()
+            self._vector_store = None
         if self._db is not None:
             self._db.close()
             self._db = None
