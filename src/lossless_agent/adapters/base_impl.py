@@ -179,6 +179,7 @@ class BaseAdapter(AgentAdapter):
                     self._vector_store,
                     top_k=self._config.cross_session_top_k,
                     token_budget=self._config.cross_session_token_budget,
+                    min_score=self._config.cross_session_min_score,
                 )
             except Exception:
                 logger.warning("Cross-session search failed", exc_info=True)

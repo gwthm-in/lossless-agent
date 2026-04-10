@@ -134,11 +134,51 @@ class TestCrossSessionContext:
         vector_store.search.return_value = [("sum_a", 0.9), ("sum_b", 0.8)]
 
         result = asyncio.run(
-            assembler.cross_session_context([0.1], 1, vector_store, top_k=2, token_budget=1500)
+            assembler.cross_session_context(
+                [0.1], 1, vector_store, top_k=2, token_budget=1500, min_score=0.0
+            )
         )
         # Only sum_a fits within budget of 1500 (sum_b would push to 2000)
         assert "sum_a" in result
         assert "sum_b" not in result
+
+    def test_min_score_filters_low_similarity(self):
+        s1 = _make_summary("sum_hi", conv_id=99, content="high score", token_count=5)
+        s2 = _make_summary("sum_lo", conv_id=99, content="low score", token_count=5)
+        assembler = self._make_assembler({"sum_hi": s1, "sum_lo": s2})
+        vector_store = MagicMock()
+        vector_store.search.return_value = [("sum_hi", 0.85), ("sum_lo", 0.45)]
+
+        result = asyncio.run(
+            assembler.cross_session_context(
+                [0.1], 1, vector_store, min_score=0.70
+            )
+        )
+        assert "sum_hi" in result
+        assert "sum_lo" not in result
+
+    def test_min_score_zero_includes_all(self):
+        s = _make_summary("sum_any", conv_id=99, content="anything", token_count=5)
+        assembler = self._make_assembler({"sum_any": s})
+        vector_store = MagicMock()
+        vector_store.search.return_value = [("sum_any", 0.1)]
+
+        result = asyncio.run(
+            assembler.cross_session_context([0.1], 1, vector_store, min_score=0.0)
+        )
+        assert "sum_any" in result
+
+    def test_default_min_score_filters_noise(self):
+        """Default 0.70 threshold should drop a 0.5-score hit."""
+        s = _make_summary("sum_noise", conv_id=99, content="noise", token_count=5)
+        assembler = self._make_assembler({"sum_noise": s})
+        vector_store = MagicMock()
+        vector_store.search.return_value = [("sum_noise", 0.5)]
+
+        result = asyncio.run(
+            assembler.cross_session_context([0.1], 1, vector_store)
+        )
+        assert result == ""
 
     def test_skips_missing_summaries(self):
         assembler = self._make_assembler(summaries_by_id={})  # no summaries found

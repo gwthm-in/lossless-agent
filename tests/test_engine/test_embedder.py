@@ -138,3 +138,9 @@ class TestConfigEmbedderEnvVars:
         assert config.embedding_dim == 1536
         assert config.cross_session_top_k == 5
         assert config.cross_session_token_budget == 2000
+        assert config.cross_session_min_score == 0.70
+
+    def test_min_score_from_env(self, monkeypatch):
+        monkeypatch.setenv("LCM_CROSS_SESSION_MIN_SCORE", "0.85")
+        config = LCMConfig.from_env()
+        assert config.cross_session_min_score == pytest.approx(0.85)

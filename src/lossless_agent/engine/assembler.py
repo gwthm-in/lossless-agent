@@ -265,6 +265,7 @@ class ContextAssembler:
         vector_store: "VectorStore",
         top_k: int = 5,
         token_budget: int = 2000,
+        min_score: float = 0.70,
     ) -> str:
         """Search other conversations for semantically similar summaries.
 
@@ -285,6 +286,8 @@ class ContextAssembler:
         parts: List[str] = []
         tokens_used = 0
         for summary_id, score in hits:
+            if score < min_score:
+                continue
             s = self._sum.get_by_id(summary_id)
             if s is None:
                 continue

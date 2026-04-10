@@ -79,6 +79,7 @@ class LCMConfig:
     embedding_api_key: str = ""    # API key; falls back to OPENAI_API_KEY env var
     cross_session_top_k: int = 5
     cross_session_token_budget: int = 2000
+    cross_session_min_score: float = 0.70  # discard hits below this cosine similarity
 
     # ------------------------------------------------------------------
     # Env-var mapping
@@ -127,6 +128,7 @@ class LCMConfig:
         "embedding_api_key": ("LCM_EMBEDDING_API_KEY", str),
         "cross_session_top_k": ("LCM_CROSS_SESSION_TOP_K", int),
         "cross_session_token_budget": ("LCM_CROSS_SESSION_TOKEN_BUDGET", int),
+        "cross_session_min_score": ("LCM_CROSS_SESSION_MIN_SCORE", float),
     }
 
     # ------------------------------------------------------------------
