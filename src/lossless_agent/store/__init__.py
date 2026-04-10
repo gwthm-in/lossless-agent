@@ -8,6 +8,7 @@ from .abc import (
     AbstractSummaryStore,
 )
 from .database import Database
+from .factory import create_database
 from .context_item_store import ContextItemStore
 from .conversation_store import ConversationStore
 from .message_part_store import MessagePartStore
@@ -28,6 +29,7 @@ __all__ = [
     "AbstractSummaryStore",
     "Database",
     "PostgresDatabase",
+    "create_database",
     "ContextItemStore",
     "ConversationStore",
     "MessagePartStore",
