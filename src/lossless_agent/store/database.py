@@ -209,6 +209,8 @@ CREATE INDEX IF NOT EXISTS bootstrap_state_path_idx ON conversation_bootstrap_st
 class Database:
     """Manages a SQLite connection with the lossless-agent schema."""
 
+    backend = "sqlite"
+
     def __init__(self, path: str = ":memory:") -> None:
         self.path = path
         self.conn = sqlite3.connect(path)
