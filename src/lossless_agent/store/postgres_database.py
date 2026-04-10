@@ -203,13 +203,18 @@ def _translate_sql(sql: str) -> str:
     # strftime('%Y-%m-%dT%H:%M:%f', 'now') → CURRENT_TIMESTAMP
     translated = _STRFTIME_RE.sub("CURRENT_TIMESTAMP", translated)
 
-    # INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING
-    translated = _INSERT_OR_IGNORE_RE.sub("INSERT INTO", translated)
-    if "ON CONFLICT DO NOTHING" not in translated and "INSERT OR IGNORE" in sql.upper():
-        # Append ON CONFLICT DO NOTHING before any RETURNING clause
+    # INSERT OR IGNORE → INSERT INTO ... ON CONFLICT DO NOTHING
+    if _INSERT_OR_IGNORE_RE.search(sql):
+        translated = _INSERT_OR_IGNORE_RE.sub("INSERT INTO", translated)
         translated = translated.rstrip(";") + " ON CONFLICT DO NOTHING"
 
     return translated
+
+
+_SERIAL_TABLE_RE = re.compile(
+    r"INSERT\s+(?:OR\s+IGNORE\s+)?INTO\s+(conversations|messages|large_files)\s*\(",
+    re.IGNORECASE,
+)
 
 
 def _needs_returning(sql: str) -> bool:
@@ -217,12 +222,9 @@ def _needs_returning(sql: str) -> bool:
     upper = sql.strip().upper()
     if not upper.startswith("INSERT"):
         return False
-    # Tables with SERIAL id columns
-    serial_tables = ("conversations", "messages", "large_files")
-    for table in serial_tables:
-        if table.upper() in upper and "RETURNING" not in upper:
-            return True
-    return False
+    if "RETURNING" in upper:
+        return False
+    return _SERIAL_TABLE_RE.search(sql) is not None
 
 
 # ---------------------------------------------------------------------------

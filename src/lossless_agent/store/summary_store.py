@@ -198,10 +198,21 @@ class SummaryStore(AbstractSummaryStore):
 
     def search(self, query: str) -> List[Summary]:
         """Full-text search across summary content."""
-        rows = self._db.conn.execute(
-            f"SELECT s.{self._SELECT_COLS.replace(', ', ', s.')} "
-            "FROM summaries s JOIN summaries_fts f ON s.rowid = f.rowid "
-            "WHERE summaries_fts MATCH ? ORDER BY rank",
-            (query,),
-        ).fetchall()
+        backend = getattr(self._db, "backend", "sqlite")
+        if backend == "postgres":
+            # Postgres: use tsvector/tsquery with GIN index
+            rows = self._db.conn.execute(
+                f"SELECT {self._SELECT_COLS} FROM summaries "
+                "WHERE to_tsvector('english', content) @@ plainto_tsquery('english', ?) "
+                "ORDER BY ts_rank(to_tsvector('english', content), plainto_tsquery('english', ?)) DESC",
+                (query, query),
+            ).fetchall()
+        else:
+            # SQLite: use FTS5 MATCH
+            rows = self._db.conn.execute(
+                f"SELECT s.{self._SELECT_COLS.replace(', ', ', s.')} "
+                "FROM summaries s JOIN summaries_fts f ON s.rowid = f.rowid "
+                "WHERE summaries_fts MATCH ? ORDER BY rank",
+                (query,),
+            ).fetchall()
         return [self._row_to_summary(r) for r in rows]

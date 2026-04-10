@@ -14,6 +14,12 @@ from .message_part_store import MessagePartStore
 from .message_store import MessageStore
 from .summary_store import SummaryStore
 
+# Postgres backend (optional – requires psycopg2)
+try:
+    from .postgres_database import PostgresDatabase
+except ImportError:
+    PostgresDatabase = None  # type: ignore[misc,assignment]
+
 __all__ = [
     "AbstractConversationStore",
     "AbstractContextItemStore",
@@ -21,6 +27,7 @@ __all__ = [
     "AbstractMessageStore",
     "AbstractSummaryStore",
     "Database",
+    "PostgresDatabase",
     "ContextItemStore",
     "ConversationStore",
     "MessagePartStore",
