@@ -93,6 +93,22 @@ await adapter.on_turn_end("session-1", messages)
 await adapter.on_session_end("session-1")
 ```
 
+## Cross-session retrieval (optional)
+
+To enable semantic cross-session retrieval, install Postgres dependencies
+and configure an embedding provider:
+
+```bash
+pip install lossless-agent[postgres]
+
+export LCM_CROSS_SESSION_ENABLED=true
+export LCM_EMBEDDING_BASE_URL=https://api.openai.com/v1
+export LCM_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+This requires a Postgres database with the `pgvector` extension. See
+[Semantic Retrieval](semantic-retrieval.md) for full setup details.
+
 ## Environment variables
 
 You can configure lossless-agent entirely through environment variables

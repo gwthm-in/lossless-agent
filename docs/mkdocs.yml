@@ -36,6 +36,7 @@ nav:
   - Configuration: configuration.md
   - Adapters: adapters.md
   - API Reference: api.md
+  - Semantic Retrieval: semantic-retrieval.md
 
 markdown_extensions:
   - admonition

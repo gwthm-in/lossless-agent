@@ -49,6 +49,13 @@ config = LCMConfig.merge(base_config, {"max_context_tokens": 64_000})
 | `ignore_session_patterns` | `LCM_IGNORE_SESSION_PATTERNS` | `[]` | Comma-separated glob patterns for sessions to skip |
 | `incremental_max_depth` | `LCM_INCREMENTAL_MAX_DEPTH` | `1` | Max condensed compaction depth per incremental cycle |
 | `summary_timeout_ms` | `LCM_SUMMARY_TIMEOUT_MS` | `60000` | Timeout in ms for summarisation calls |
+| `cross_session_enabled` | `LCM_CROSS_SESSION_ENABLED` | `False` | Enable cross-session semantic retrieval via pgvector |
+| `embedding_base_url` | `LCM_EMBEDDING_BASE_URL` | `""` | Base URL for OpenAI-compatible embedding API |
+| `embedding_model` | `LCM_EMBEDDING_MODEL` | `""` | Embedding model name (e.g. `text-embedding-3-small`) |
+| `embedding_dim` | `LCM_EMBEDDING_DIM` | `1536` | Dimension of embedding vectors |
+| `embedding_api_key` | `LCM_EMBEDDING_API_KEY` | `""` | API key for embedding endpoint (falls back to `OPENAI_API_KEY`) |
+| `cross_session_top_k` | `LCM_CROSS_SESSION_TOP_K` | `5` | Number of cross-session results to retrieve |
+| `cross_session_token_budget` | `LCM_CROSS_SESSION_TOKEN_BUDGET` | `2000` | Max tokens for cross-session context |
 
 ## Validation
 

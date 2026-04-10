@@ -13,10 +13,12 @@ lossless-agent is organised into four layers: **stores**, **engine**,
 ├─────────────────────────────────────────────┤
 │              Engine                         │
 │  CompactionEngine · ContextAssembler        │
+│  Embedder (optional)                        │
 ├─────────────────────────────────────────────┤
 │              Stores                         │
 │  MessageStore · SummaryStore · ConvStore    │
-│              Database (SQLite)              │
+│  VectorStore (optional, pgvector)           │
+│              Database (SQLite + Postgres)   │
 └─────────────────────────────────────────────┘
 ```
 
@@ -77,7 +79,9 @@ on_turn_end(session_key, messages)
     └── CompactionEngine.run_incremental(conv_id)
             ├── needs_compaction? (threshold check)
             ├── compact_leaf  → SummaryStore.create_leaf
+            │                   └── _maybe_embed() → VectorStore
             └── compact_condensed → SummaryStore.create_condensed
+                                    └── _maybe_embed() → VectorStore
 ```
 
 ## Store layer
@@ -91,6 +95,9 @@ search. Three stores share the same connection:
   sources via junction tables (`summary_messages`, `summary_parents`).
 - **ConversationStore** — maps external session keys to internal
   integer conversation IDs.
+- **VectorStore** *(optional)* — pgvector-backed embedding store for
+  cross-session retrieval. Uses HNSW indexing with IVFFlat fallback.
+  Only active when `cross_session_enabled=True`.
 
 All stores implement abstract base classes (`AbstractMessageStore`,
 `AbstractSummaryStore`) so you can swap in a different backend if needed.
@@ -102,7 +109,12 @@ All stores implement abstract base classes (`AbstractMessageStore`,
   summaries at each depth into condensed nodes.
 - **ContextAssembler** — builds a token-budget-aware context by
   picking the highest-depth summaries first, then filling with recent
-  messages.
+  messages. When cross-session retrieval is enabled, also calls
+  `cross_session_context()` to pull in relevant summaries from other
+  sessions.
+- **Embedder** *(optional)* — factory-pattern embedder that calls any
+  OpenAI-compatible embedding endpoint via `urllib`. Created by
+  `create_embedder(config)` when cross-session is enabled.
 
 ## Tools layer
 

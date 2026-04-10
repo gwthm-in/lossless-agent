@@ -185,6 +185,51 @@ class ExpandResult:
     children: List[Union[Message, Summary]]
 ```
 
+## Vector Store
+
+### VectorStore
+
+pgvector-backed embedding store for cross-session retrieval.
+
+```python
+class VectorStore:
+    def __init__(self, dsn: str, embedding_dim: int = 1536) -> None: ...
+
+    def ensure_table(self) -> None: ...
+    def upsert(self, summary_id: str, embedding: List[float],
+               conversation_id: int, content: str) -> None: ...
+    def query(self, embedding: List[float], top_k: int = 5,
+              exclude_conversation_id: Optional[int] = None) -> List[dict]: ...
+```
+
+**Parameters:**
+
+- `dsn` — Postgres connection string
+- `embedding_dim` — vector dimension (must match your embedding model)
+
+**query() returns** a list of dicts with keys: `summary_id`, `conversation_id`, `content`, `distance`.
+
+### Embedder
+
+```python
+class Embedder:
+    def __init__(self, base_url: str, model: str, api_key: str,
+                 dim: int = 1536) -> None: ...
+
+    def embed(self, text: str) -> List[float]: ...
+
+def create_embedder(config: LCMConfig) -> Optional[Embedder]: ...
+```
+
+**Parameters:**
+
+- `base_url` — OpenAI-compatible API base URL
+- `model` — embedding model name
+- `api_key` — API key (falls back to `OPENAI_API_KEY` env var)
+- `dim` — embedding dimension
+
+`create_embedder()` returns `None` if cross-session retrieval is disabled.
+
 ## Configuration
 
 ### LCMConfig
@@ -209,6 +254,13 @@ class LCMConfig:
     ignore_session_patterns: List[str] = field(default_factory=list)
     incremental_max_depth: int = 1
     summary_timeout_ms: int = 60_000
+    cross_session_enabled: bool = False
+    embedding_base_url: str = ""
+    embedding_model: str = ""
+    embedding_dim: int = 1536
+    embedding_api_key: str = ""
+    cross_session_top_k: int = 5
+    cross_session_token_budget: int = 2000
 
     @classmethod
     def from_env(cls) -> LCMConfig: ...
