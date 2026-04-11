@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+psycopg2 = pytest.importorskip("psycopg2")
+
 from lossless_agent.store.vector_store import VectorStore
 
 
