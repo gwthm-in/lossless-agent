@@ -383,6 +383,12 @@ class VectorStore:
                 where_clauses.append(f"conversation_id IN ({placeholders})")
                 params.extend(conversation_ids)
 
+            # Push min_score into the query so LIMIT applies after filtering,
+            # guaranteeing we return up to top_k *qualifying* results.
+            if min_score > 0:
+                where_clauses.append("1.0 - (embedding <=> %s::vector) >= %s")
+                params.extend([vec, min_score])
+
             where_sql = ""
             if where_clauses:
                 where_sql = "WHERE " + " AND ".join(where_clauses)
@@ -400,8 +406,7 @@ class VectorStore:
         finally:
             cur.close()
 
-        # Filter by min_score
-        return [(row[0], float(row[1])) for row in rows if float(row[1]) >= min_score]
+        return [(row[0], float(row[1])) for row in rows]
 
     def delete_message(self, message_id: str) -> None:
         """Delete a message embedding."""

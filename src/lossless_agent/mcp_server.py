@@ -13,8 +13,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 from dataclasses import asdict
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -32,6 +35,8 @@ from lossless_agent.tools.recall import (
     lcm_grep,
     lcm_describe,
     lcm_expand,
+    GrepResult,
+    _truncate,
 )
 from lossless_agent.tools.expand_query import (
     ExpansionOrchestrator,
@@ -327,6 +332,30 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["session_key"],
             },
         ),
+        types.Tool(
+            name="lcm_backfill",
+            description=(
+                "Embed existing messages that were stored before raw vector retrieval "
+                "was enabled. Iterates all unembedded messages in the database and "
+                "stores their vectors. Safe to re-run — skips already-embedded messages. "
+                "Only available when raw_vector_enabled=True."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "batch_size": {
+                        "type": "integer",
+                        "default": 256,
+                        "description": "Number of messages to embed per batch",
+                    },
+                    "conversation_id": {
+                        "type": ["integer", "null"],
+                        "default": None,
+                        "description": "Limit backfill to a single conversation (optional)",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -382,15 +411,14 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                     vec_only_ids = [mid for mid in merged_ids if mid not in fts_by_id]
                     vec_messages = {}
                     if vec_only_ids:
-                        msg_store = MessageStore(_db)
                         for mid in vec_only_ids:
+                            # message_id stored as str in pgvector; SQLite id is int
                             row = _db.conn.execute(
                                 "SELECT id, conversation_id, content, role, seq, created_at "
                                 "FROM messages WHERE id = ?",
-                                (mid,),
+                                (int(mid),),
                             ).fetchone()
                             if row:
-                                from lossless_agent.tools.recall import GrepResult, _truncate
                                 vec_messages[mid] = GrepResult(
                                     type="message",
                                     id=row[0],
@@ -409,10 +437,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                             reordered.append(vec_messages[doc_id])
                     fts_results = reordered
             except Exception as exc:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Vector search failed, using FTS only: %s", exc
-                )
+                logger.warning("Vector search failed, using FTS only: %s", exc)
 
         payload = [_serialize(r) for r in fts_results]
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
@@ -496,6 +521,9 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     elif name == "lcm_session_end":
         return await _handle_session_end(arguments)
 
+    elif name == "lcm_backfill":
+        return await _handle_backfill(arguments)
+
     else:
         return [types.TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
 
@@ -545,16 +573,13 @@ async def _handle_ingest(arguments: dict) -> list[types.TextContent]:
             if texts:
                 embeddings = await _raw_batch_embed_fn(texts)
                 items = [
-                    (mid, conv.id, emb)
+                    (str(mid), conv.id, emb)
                     for mid, emb in zip(msg_ids, embeddings)
                 ]
                 _vector_store.store_messages_batch(items)
                 embedded_count = len(items)
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Failed to embed messages at ingestion: %s", exc
-            )
+            logger.warning("Failed to embed messages at ingestion: %s", exc)
 
     # Run incremental compaction if needed
     sum_store = SummaryStore(_db)
@@ -664,6 +689,90 @@ async def _handle_session_end(arguments: dict) -> list[types.TextContent]:
         "session_closed": True,
     }
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def _handle_backfill(arguments: dict) -> list[types.TextContent]:
+    """Embed all messages that don't yet have a vector — idempotent."""
+    assert _db is not None
+
+    if not _vector_store or not _raw_batch_embed_fn:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"error": "raw vector retrieval not enabled or no vector store configured"}),
+        )]
+
+    batch_size = int(arguments.get("batch_size") or 256)
+    filter_conv = arguments.get("conversation_id")
+
+    conn = _db.conn
+    if filter_conv is not None:
+        rows = conn.execute(
+            "SELECT id, content FROM messages WHERE conversation_id = ? ORDER BY id",
+            (filter_conv,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, content FROM messages ORDER BY id"
+        ).fetchall()
+
+    # Fetch already-embedded message IDs from pgvector
+    existing_ids: set[str] = set()
+    try:
+        pg_conn = _vector_store._get_conn()
+        cur = pg_conn.cursor()
+        cur.execute("SELECT message_id FROM message_embeddings")
+        existing_ids = {row[0] for row in cur.fetchall()}
+        cur.close()
+    except Exception as exc:
+        logger.warning("Could not fetch existing embeddings for backfill check: %s", exc)
+
+    # Filter to unembedded messages with non-empty content
+    todo = [
+        (row[0], row[1]) for row in rows
+        if row[1] and row[1].strip() and str(row[0]) not in existing_ids
+    ]
+
+    if not todo:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"status": "ok", "embedded": 0, "skipped": len(rows)}),
+        )]
+
+    # Get conversation_id for each message
+    msg_conv = {}
+    if filter_conv is not None:
+        msg_conv = {row[0]: filter_conv for row in rows}
+    else:
+        conv_rows = conn.execute("SELECT id, conversation_id FROM messages").fetchall()
+        msg_conv = {r[0]: r[1] for r in conv_rows}
+
+    embedded = 0
+    failed = 0
+    for i in range(0, len(todo), batch_size):
+        batch = todo[i : i + batch_size]
+        ids = [r[0] for r in batch]
+        texts = [r[1] for r in batch]
+        try:
+            embeddings = await _raw_batch_embed_fn(texts)
+            items = [
+                (str(mid), msg_conv.get(mid, 0), emb)
+                for mid, emb in zip(ids, embeddings)
+            ]
+            _vector_store.store_messages_batch(items)
+            embedded += len(items)
+        except Exception as exc:
+            logger.warning("Backfill batch %d failed: %s", i // batch_size, exc)
+            failed += len(batch)
+
+    return [types.TextContent(
+        type="text",
+        text=json.dumps({
+            "status": "ok",
+            "embedded": embedded,
+            "failed": failed,
+            "skipped": len(rows) - len(todo),
+        }),
+    )]
 
 
 # ------------------------------------------------------------------

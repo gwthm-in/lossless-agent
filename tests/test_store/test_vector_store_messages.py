@@ -82,15 +82,27 @@ class TestSearchMessages:
         assert results[0] == ("msg_1", 0.92)
         assert results[1] == ("msg_2", 0.85)
 
-    def test_filters_by_min_score(self):
+    def test_min_score_pushed_into_sql_where_clause(self):
+        """min_score must appear in the SQL WHERE clause, not filtered in Python."""
         store, conn, cursor = _make_store()
-        cursor.fetchall.return_value = [
-            ("msg_1", 0.92),
-            ("msg_2", 0.30),  # below default min_score
-        ]
-        results = store.search_messages([0.1, 0.2, 0.3], min_score=0.35)
-        assert len(results) == 1
-        assert results[0][0] == "msg_1"
+        cursor.fetchall.return_value = [("msg_1", 0.92)]
+        store.search_messages([0.1, 0.2, 0.3], min_score=0.35)
+        sql = cursor.execute.call_args[0][0]
+        # The threshold condition must be in the WHERE clause
+        assert "WHERE" in sql
+        # The params list must include the threshold value
+        params = cursor.execute.call_args[0][1]
+        assert 0.35 in params
+
+    def test_min_score_zero_omits_threshold_clause(self):
+        """min_score=0 should not add a WHERE clause for the threshold."""
+        store, conn, cursor = _make_store()
+        cursor.fetchall.return_value = []
+        store.search_messages([0.1, 0.2, 0.3], min_score=0.0)
+        sql = cursor.execute.call_args[0][0]
+        params = cursor.execute.call_args[0][1]
+        # No threshold value injected
+        assert 0.0 not in params
 
     def test_filters_by_conversation_ids(self):
         store, conn, cursor = _make_store()

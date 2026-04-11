@@ -88,17 +88,23 @@ def make_embedder(config: "LCMConfig") -> Optional[EmbedFn]:
 # Local embeddings via fastembed (no API key, no network)
 # ------------------------------------------------------------------
 
-_local_model = None  # lazy singleton
+_local_model = None          # lazy singleton
+_local_model_name: str = ""  # tracks which model is loaded
 
 
 def _get_local_model(model_name: str = "BAAI/bge-small-en-v1.5"):
-    """Lazy-load the fastembed model (singleton to avoid re-downloading)."""
-    global _local_model
-    if _local_model is None:
+    """Lazy-load the fastembed model (singleton to avoid re-downloading).
+
+    Re-loads if *model_name* differs from the currently loaded model so
+    that config changes at runtime produce the correct embeddings.
+    """
+    global _local_model, _local_model_name
+    if _local_model is None or _local_model_name != model_name:
         try:
             from fastembed import TextEmbedding
             logger.info("Loading local embedding model: %s", model_name)
             _local_model = TextEmbedding(model_name)
+            _local_model_name = model_name
         except ImportError:
             raise ImportError(
                 "fastembed is required for local embeddings. "
@@ -180,12 +186,25 @@ def make_raw_vector_embedder(config: "LCMConfig") -> Optional[EmbedFn]:
 
 
 def make_raw_vector_batch_embedder(config: "LCMConfig") -> Optional[BatchEmbedFn]:
-    """Return a batch embed function for raw vector ingestion, or None if disabled."""
+    """Return a batch embed function for raw vector ingestion, or None if disabled.
+
+    Local mode (raw_vector_use_local=True) uses fastembed's native batch
+    embed for efficiency.  API mode falls back to a sequential loop over
+    the single-embed function so it is never a silent no-op.
+    """
     if not config.raw_vector_enabled:
         return None
 
     if config.raw_vector_use_local:
         return make_local_batch_embedder(config.raw_vector_model)
 
-    # No batch API embedder yet — could be added later
-    return None
+    # API mode: no dedicated batch endpoint, wrap single-embed in a loop
+    single_embed = make_raw_vector_embedder(config)
+    if single_embed is None:
+        return None
+
+    async def _api_batch(texts: List[str]) -> List[List[float]]:
+        import asyncio
+        return list(await asyncio.gather(*[single_embed(t) for t in texts]))
+
+    return _api_batch
