@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lossless_agent.config import LCMConfig
-from lossless_agent.engine.embedder import EmbedFn, make_embedder, _http_embed
+from lossless_agent.engine.embedder import make_embedder, _http_embed
 
 
 # ---------------------------------------------------------------------------

@@ -99,7 +99,6 @@ class TestSearchMessages:
         store, conn, cursor = _make_store()
         cursor.fetchall.return_value = []
         store.search_messages([0.1, 0.2, 0.3], min_score=0.0)
-        sql = cursor.execute.call_args[0][0]
         params = cursor.execute.call_args[0][1]
         # No threshold value injected
         assert 0.0 not in params
@@ -107,7 +106,7 @@ class TestSearchMessages:
     def test_filters_by_conversation_ids(self):
         store, conn, cursor = _make_store()
         cursor.fetchall.return_value = [("msg_1", 0.9)]
-        results = store.search_messages(
+        store.search_messages(
             [0.1, 0.2, 0.3],
             conversation_ids=[1, 2, 3],
         )
@@ -117,7 +116,7 @@ class TestSearchMessages:
     def test_exclude_conversation(self):
         store, conn, cursor = _make_store()
         cursor.fetchall.return_value = []
-        results = store.search_messages(
+        store.search_messages(
             [0.1, 0.2, 0.3],
             exclude_conversation_id=5,
         )

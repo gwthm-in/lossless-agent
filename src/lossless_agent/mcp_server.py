@@ -17,8 +17,6 @@ import logging
 from dataclasses import asdict
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
-
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
@@ -50,6 +48,8 @@ from lossless_agent.engine.embedder import (
     make_raw_vector_embedder,
 )
 from lossless_agent.engine.fusion import reciprocal_rank_fusion
+
+logger = logging.getLogger(__name__)
 
 server = Server("lossless-agent")
 _db: Database | None = None

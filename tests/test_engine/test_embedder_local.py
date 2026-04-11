@@ -6,8 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lossless_agent.engine.embedder import (
-    make_local_embedder,
-    make_local_batch_embedder,
     make_raw_vector_embedder,
     make_raw_vector_batch_embedder,
     _get_local_model,
