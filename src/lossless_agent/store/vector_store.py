@@ -9,7 +9,7 @@ Requires: psycopg2-binary + pgvector Postgres extension.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class VectorStore:
         self._dsn = dsn
         self._dim = dim
         self._msg_dim = msg_dim
-        self._conn = None
+        self._conn: Any = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -430,7 +430,7 @@ class VectorStore:
         cur = conn.cursor()
         try:
             cur.execute("SELECT COUNT(*) FROM message_embeddings")
-            return cur.fetchone()[0]
+            return int(cur.fetchone()[0])
         finally:
             cur.close()
 

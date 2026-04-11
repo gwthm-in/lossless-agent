@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 from dataclasses import asdict
-from typing import Any, Optional
+from typing import Any, List, Optional, cast
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -395,8 +395,9 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                 )
 
                 if vec_hits:
+                    flat_fts = cast(List[GrepResult], fts_results)
                     # Build FTS ranked list: (id, rank_score)
-                    fts_ranked = [(str(r.id), 1.0 / (i + 1)) for i, r in enumerate(fts_results)]
+                    fts_ranked = [(str(r.id), 1.0 / (i + 1)) for i, r in enumerate(flat_fts)]
                     # Vec ranked list: (id, similarity)
                     vec_ranked = [(mid, sim) for mid, sim in vec_hits]
 
@@ -405,7 +406,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                     merged_ids = [doc_id for doc_id, _ in merged[:limit]]
 
                     # Build a lookup of existing FTS results by ID
-                    fts_by_id = {str(r.id): r for r in fts_results}
+                    fts_by_id = {str(r.id): r for r in flat_fts}
 
                     # Fetch message content for vector-only hits
                     vec_only_ids = [mid for mid in merged_ids if mid not in fts_by_id]

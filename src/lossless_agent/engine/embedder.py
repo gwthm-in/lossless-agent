@@ -42,7 +42,7 @@ def _http_embed(
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return data["data"][0]["embedding"]
+        return list(data["data"][0]["embedding"])
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(
@@ -117,7 +117,7 @@ def _local_embed_sync(text: str, model_name: str) -> List[float]:
     """Synchronous local embedding for a single text."""
     model = _get_local_model(model_name)
     embeddings = list(model.embed([text]))
-    return embeddings[0].tolist()
+    return list(embeddings[0].tolist())
 
 
 def _local_embed_batch_sync(texts: List[str], model_name: str) -> List[List[float]]:
