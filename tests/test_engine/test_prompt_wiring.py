@@ -60,7 +60,7 @@ class TestLeafPromptContainsPreviousContext:
         )
 
         # First leaf pass — no prior summaries exist yet
-        result1 = asyncio.get_event_loop().run_until_complete(engine.compact_leaf(conv.id))
+        result1 = asyncio.run(engine.compact_leaf(conv.id))
         assert result1 is not None
         assert len(received_prompts) == 1
         prompt1 = received_prompts[0]
@@ -72,7 +72,7 @@ class TestLeafPromptContainsPreviousContext:
         assert "</messages>" in prompt1
 
         # Second leaf pass — now prior summary exists
-        result2 = asyncio.get_event_loop().run_until_complete(engine.compact_leaf(conv.id))
+        result2 = asyncio.run(engine.compact_leaf(conv.id))
         if result2 is not None and len(received_prompts) > 1:
             prompt2 = received_prompts[-1]
             # Should have previous context from first summary
@@ -95,7 +95,7 @@ class TestLeafPromptContainsPreviousContext:
         )
         engine = CompactionEngine(msg_store, sum_store, capture_summarize, config=config)
 
-        asyncio.get_event_loop().run_until_complete(engine.compact_leaf(conv.id))
+        asyncio.run(engine.compact_leaf(conv.id))
         assert len(received_prompts) >= 1
         assert "Preserve all function signatures" in received_prompts[0]
 
@@ -112,7 +112,7 @@ class TestLeafPromptContainsPreviousContext:
         config = CompactionConfig(fresh_tail_count=4, leaf_min_fanout=3)
         engine = CompactionEngine(msg_store, sum_store, capture_summarize, config=config)
 
-        asyncio.get_event_loop().run_until_complete(engine.compact_leaf(conv.id))
+        asyncio.run(engine.compact_leaf(conv.id))
         assert "Operator instructions: (none)" in received_prompts[0]
 
 
@@ -142,10 +142,10 @@ class TestCondensedPromptWiring:
 
         # Do multiple leaf passes to create enough summaries for condensed
         for _ in range(5):
-            asyncio.get_event_loop().run_until_complete(engine.compact_leaf(conv.id))
+            asyncio.run(engine.compact_leaf(conv.id))
 
         # Try condensed pass
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             engine.compact_condensed(conv.id, depth=0)
         )
 
@@ -177,7 +177,7 @@ class TestFullSweepChainsPreviousSummary:
         )
         engine = CompactionEngine(msg_store, sum_store, capture_summarize, config=config)
 
-        results = asyncio.get_event_loop().run_until_complete(
+        results = asyncio.run(
             engine.compact_full_sweep(conv.id)
         )
 

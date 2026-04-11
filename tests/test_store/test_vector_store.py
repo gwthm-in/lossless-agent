@@ -4,9 +4,11 @@ All tests mock psycopg2 — no real Postgres connection required.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
+
+psycopg2 = pytest.importorskip("psycopg2")
 
 from lossless_agent.store.vector_store import VectorStore
 
@@ -28,11 +30,12 @@ def _make_mock_conn():
     return conn, cursor
 
 
-def _make_store(dsn="postgresql://localhost/test", dim=3):
+def _make_store(dsn="postgresql://localhost/test", dim=3, msg_dim=384):
     """Return a VectorStore with a mocked psycopg2 connection."""
     store = VectorStore.__new__(VectorStore)
     store._dsn = dsn
     store._dim = dim
+    store._msg_dim = msg_dim
     conn, cursor = _make_mock_conn()
     store._conn = conn
     return store, conn, cursor

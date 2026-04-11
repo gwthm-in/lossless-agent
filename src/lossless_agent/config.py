@@ -81,6 +81,14 @@ class LCMConfig:
     cross_session_token_budget: int = 2000
     cross_session_min_score: float = 0.70  # discard hits below this cosine similarity
 
+    # Raw vector retrieval (embeds messages at ingestion time, no LLM calls)
+    raw_vector_enabled: bool = False  # opt-in; requires pgvector + database_dsn
+    raw_vector_model: str = "BAAI/bge-small-en-v1.5"
+    raw_vector_dim: int = 384
+    raw_vector_top_k: int = 20
+    raw_vector_min_score: float = 0.35
+    raw_vector_use_local: bool = True  # use fastembed (no API key needed)
+
     # ------------------------------------------------------------------
     # Env-var mapping
     # ------------------------------------------------------------------
@@ -129,6 +137,12 @@ class LCMConfig:
         "cross_session_top_k": ("LCM_CROSS_SESSION_TOP_K", int),
         "cross_session_token_budget": ("LCM_CROSS_SESSION_TOKEN_BUDGET", int),
         "cross_session_min_score": ("LCM_CROSS_SESSION_MIN_SCORE", float),
+        "raw_vector_enabled": ("LCM_RAW_VECTOR_ENABLED", _parse_bool),
+        "raw_vector_model": ("LCM_RAW_VECTOR_MODEL", str),
+        "raw_vector_dim": ("LCM_RAW_VECTOR_DIM", int),
+        "raw_vector_top_k": ("LCM_RAW_VECTOR_TOP_K", int),
+        "raw_vector_min_score": ("LCM_RAW_VECTOR_MIN_SCORE", float),
+        "raw_vector_use_local": ("LCM_RAW_VECTOR_USE_LOCAL", _parse_bool),
     }
 
     # ------------------------------------------------------------------

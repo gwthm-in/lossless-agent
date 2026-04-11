@@ -45,7 +45,7 @@ def conversation_id(db):
 class TestFileIdFormat:
     def test_file_id_starts_with_file_prefix(self, interceptor, conversation_id):
         big = "x" * 50000
-        _, file_id = asyncio.get_event_loop().run_until_complete(
+        _, file_id = asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         assert file_id is not None
@@ -56,7 +56,7 @@ class TestFileIdFormat:
     def test_file_ids_are_unique(self, interceptor, conversation_id):
         ids = set()
         for _ in range(5):
-            _, file_id = asyncio.get_event_loop().run_until_complete(
+            _, file_id = asyncio.run(
                 interceptor.intercept(conversation_id, "x" * 50000, token_count=30000)
             )
             ids.add(file_id)
@@ -66,7 +66,7 @@ class TestFileIdFormat:
 class TestSmallContentPassthroughV2:
     def test_small_content_passes_through(self, interceptor, conversation_id):
         content = "Small content"
-        result_content, file_id = asyncio.get_event_loop().run_until_complete(
+        result_content, file_id = asyncio.run(
             interceptor.intercept(conversation_id, content, token_count=10)
         )
         assert result_content == content
@@ -76,7 +76,7 @@ class TestSmallContentPassthroughV2:
 class TestLargeContentInterceptionV2:
     def test_large_content_gets_intercepted(self, interceptor, conversation_id):
         big = "x" * 50000
-        result_content, file_id = asyncio.get_event_loop().run_until_complete(
+        result_content, file_id = asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         assert file_id is not None
@@ -85,7 +85,7 @@ class TestLargeContentInterceptionV2:
 
     def test_content_saved_to_filesystem(self, interceptor, conversation_id, config):
         big = "saved content " * 5000
-        _, file_id = asyncio.get_event_loop().run_until_complete(
+        _, file_id = asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         storage_path = os.path.join(
@@ -97,7 +97,7 @@ class TestLargeContentInterceptionV2:
 
     def test_stored_in_large_files_v2_table(self, interceptor, conversation_id, db):
         big = "x" * 50000
-        _, file_id = asyncio.get_event_loop().run_until_complete(
+        _, file_id = asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         row = db.conn.execute(
@@ -114,7 +114,7 @@ class TestLargeContentInterceptionV2:
 class TestGetFileV2:
     def test_get_file_retrieves_stored_content(self, interceptor, conversation_id):
         big = "stored content " * 5000
-        _, file_id = asyncio.get_event_loop().run_until_complete(
+        _, file_id = asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         result = interceptor.get_file(file_id)
@@ -129,7 +129,7 @@ class TestGetFileV2:
 
     def test_get_files_for_conversation(self, interceptor, conversation_id):
         for i in range(3):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 interceptor.intercept(
                     conversation_id, f"big content {i}" * 5000, token_count=30000
                 )
