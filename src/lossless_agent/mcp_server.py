@@ -37,9 +37,22 @@ from lossless_agent.tools.expand_query import (
     ExpansionOrchestrator,
 )
 
+from lossless_agent.store.vector_store import VectorStore
+from lossless_agent.engine.embedder import (
+    BatchEmbedFn,
+    EmbedFn,
+    make_raw_vector_batch_embedder,
+    make_raw_vector_embedder,
+)
+from lossless_agent.engine.fusion import reciprocal_rank_fusion
+
 server = Server("lossless-agent")
 _db: Database | None = None
 _summarize_command: Optional[str] = None
+_config: Optional[LCMConfig] = None
+_vector_store: Optional[VectorStore] = None
+_raw_embed_fn: Optional[EmbedFn] = None
+_raw_batch_embed_fn: Optional[BatchEmbedFn] = None
 
 
 def _serialize(obj: Any) -> Any:
@@ -326,14 +339,82 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     assert _db is not None, "Database not initialized"
 
     if name == "lcm_grep":
-        results = lcm_grep(
+        query = arguments["query"]
+        scope = arguments.get("scope", "all")
+        conversation_id = arguments.get("conversation_id")
+        limit = arguments.get("limit", 20)
+
+        # FTS5 keyword search (existing)
+        fts_results = lcm_grep(
             _db,
-            query=arguments["query"],
-            scope=arguments.get("scope", "all"),
-            conversation_id=arguments.get("conversation_id"),
-            limit=arguments.get("limit", 20),
+            query=query,
+            scope=scope,
+            conversation_id=conversation_id,
+            limit=limit,
         )
-        payload = [_serialize(r) for r in results]
+
+        # Vector search (if raw vector retrieval is enabled)
+        if _vector_store and _raw_embed_fn and scope in ("all", "messages"):
+            try:
+                query_embedding = await _raw_embed_fn(query)
+                conv_ids = [conversation_id] if conversation_id else None
+                vec_hits = _vector_store.search_messages(
+                    query_embedding,
+                    top_k=_config.raw_vector_top_k if _config else 20,
+                    conversation_ids=conv_ids,
+                    min_score=_config.raw_vector_min_score if _config else 0.35,
+                )
+
+                if vec_hits:
+                    # Build FTS ranked list: (id, rank_score)
+                    fts_ranked = [(str(r.id), 1.0 / (i + 1)) for i, r in enumerate(fts_results)]
+                    # Vec ranked list: (id, similarity)
+                    vec_ranked = [(mid, sim) for mid, sim in vec_hits]
+
+                    # Merge with RRF
+                    merged = reciprocal_rank_fusion(fts_ranked, vec_ranked, k=60)
+                    merged_ids = [doc_id for doc_id, _ in merged[:limit]]
+
+                    # Build a lookup of existing FTS results by ID
+                    fts_by_id = {str(r.id): r for r in fts_results}
+
+                    # Fetch message content for vector-only hits
+                    vec_only_ids = [mid for mid in merged_ids if mid not in fts_by_id]
+                    vec_messages = {}
+                    if vec_only_ids:
+                        msg_store = MessageStore(_db)
+                        for mid in vec_only_ids:
+                            row = _db.conn.execute(
+                                "SELECT id, conversation_id, content, role, seq, created_at "
+                                "FROM messages WHERE id = ?",
+                                (mid,),
+                            ).fetchone()
+                            if row:
+                                from lossless_agent.tools.recall import GrepResult, _truncate
+                                vec_messages[mid] = GrepResult(
+                                    type="message",
+                                    id=row[0],
+                                    content_snippet=_truncate(row[2]),
+                                    conversation_id=row[1],
+                                    metadata={"role": row[3], "seq": row[4], "source": "vector"},
+                                    created_at=row[5],
+                                )
+
+                    # Reorder results by RRF ranking
+                    reordered = []
+                    for doc_id in merged_ids:
+                        if doc_id in fts_by_id:
+                            reordered.append(fts_by_id[doc_id])
+                        elif doc_id in vec_messages:
+                            reordered.append(vec_messages[doc_id])
+                    fts_results = reordered
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Vector search failed, using FTS only: %s", exc
+                )
+
+        payload = [_serialize(r) for r in fts_results]
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
     elif name == "lcm_describe":
@@ -449,6 +530,32 @@ async def _handle_ingest(arguments: dict) -> list[types.TextContent]:
         )
         ingested.append({"id": m.id, "seq": m.seq, "role": m.role})
 
+    # Embed messages at ingestion time (raw vector retrieval)
+    embedded_count = 0
+    if _vector_store and _raw_batch_embed_fn:
+        try:
+            texts = []
+            msg_ids = []
+            for msg_data, ing in zip(raw_messages, ingested):
+                content = msg_data.get("content", "")
+                if content and content.strip():
+                    texts.append(content)
+                    msg_ids.append(ing["id"])
+
+            if texts:
+                embeddings = await _raw_batch_embed_fn(texts)
+                items = [
+                    (mid, conv.id, emb)
+                    for mid, emb in zip(msg_ids, embeddings)
+                ]
+                _vector_store.store_messages_batch(items)
+                embedded_count = len(items)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to embed messages at ingestion: %s", exc
+            )
+
     # Run incremental compaction if needed
     sum_store = SummaryStore(_db)
     summarize_fn = _get_summarize_fn()
@@ -465,6 +572,7 @@ async def _handle_ingest(arguments: dict) -> list[types.TextContent]:
         "status": "ok",
         "conversation_id": conv.id,
         "messages_ingested": len(ingested),
+        "messages_embedded": embedded_count,
         "messages": ingested,
         "summaries_created": compacted_count,
     }
@@ -563,9 +671,36 @@ async def _handle_session_end(arguments: dict) -> list[types.TextContent]:
 # ------------------------------------------------------------------
 
 async def main(db_path: str, db_dsn: str = "") -> None:
-    global _db
+    global _db, _config, _vector_store, _raw_embed_fn, _raw_batch_embed_fn
     cfg = LCMConfig(db_path=db_path, database_dsn=db_dsn)
+    _config = cfg
     _db = create_database(cfg)
+
+    # Initialize raw vector retrieval if configured
+    if cfg.raw_vector_enabled and cfg.database_dsn:
+        try:
+            _vector_store = VectorStore(
+                dsn=cfg.database_dsn,
+                dim=cfg.embedding_dim,
+                msg_dim=cfg.raw_vector_dim,
+            )
+            _raw_embed_fn = make_raw_vector_embedder(cfg)
+            _raw_batch_embed_fn = make_raw_vector_batch_embedder(cfg)
+            import logging
+            logging.getLogger(__name__).info(
+                "Raw vector retrieval enabled (model=%s, dim=%d)",
+                cfg.raw_vector_model,
+                cfg.raw_vector_dim,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to initialize raw vector retrieval: %s", exc
+            )
+            _vector_store = None
+            _raw_embed_fn = None
+            _raw_batch_embed_fn = None
+
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
@@ -574,6 +709,8 @@ async def main(db_path: str, db_dsn: str = "") -> None:
                 server.create_initialization_options(),
             )
     finally:
+        if _vector_store:
+            _vector_store.close()
         _db.close()
 
 

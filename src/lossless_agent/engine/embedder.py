@@ -3,6 +3,9 @@
 Supports any OpenAI-compatible HTTP endpoint (OpenAI, LiteLLM proxy,
 Ollama, etc.). No hard dependency on openai SDK — uses urllib.request
 in a thread-pool executor so it doesn't block the event loop.
+
+Also supports local embeddings via fastembed (BAAI/bge-small-en-v1.5)
+for zero-cost, zero-latency embedding at ingestion time.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 EmbedFn = Callable[[str], Awaitable[List[float]]]
+BatchEmbedFn = Callable[[List[str]], Awaitable[List[List[float]]]]
 
 
 def _http_embed(
@@ -78,3 +82,110 @@ def make_embedder(config: "LCMConfig") -> Optional[EmbedFn]:
         )
 
     return _embed
+
+
+# ------------------------------------------------------------------
+# Local embeddings via fastembed (no API key, no network)
+# ------------------------------------------------------------------
+
+_local_model = None  # lazy singleton
+
+
+def _get_local_model(model_name: str = "BAAI/bge-small-en-v1.5"):
+    """Lazy-load the fastembed model (singleton to avoid re-downloading)."""
+    global _local_model
+    if _local_model is None:
+        try:
+            from fastembed import TextEmbedding
+            logger.info("Loading local embedding model: %s", model_name)
+            _local_model = TextEmbedding(model_name)
+        except ImportError:
+            raise ImportError(
+                "fastembed is required for local embeddings. "
+                "Install with: pip install fastembed"
+            )
+    return _local_model
+
+
+def _local_embed_sync(text: str, model_name: str) -> List[float]:
+    """Synchronous local embedding for a single text."""
+    model = _get_local_model(model_name)
+    embeddings = list(model.embed([text]))
+    return embeddings[0].tolist()
+
+
+def _local_embed_batch_sync(texts: List[str], model_name: str) -> List[List[float]]:
+    """Synchronous local batch embedding."""
+    if not texts:
+        return []
+    model = _get_local_model(model_name)
+    embeddings = list(model.embed(texts))
+    return [e.tolist() for e in embeddings]
+
+
+def make_local_embedder(
+    model_name: str = "BAAI/bge-small-en-v1.5",
+) -> EmbedFn:
+    """Return an async embed function using local fastembed model.
+
+    No API key needed. No network calls. Uses BAAI/bge-small-en-v1.5
+    (384 dimensions) by default.
+    """
+    async def _embed(text: str) -> List[float]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, _local_embed_sync, text, model_name,
+        )
+
+    return _embed
+
+
+def make_local_batch_embedder(
+    model_name: str = "BAAI/bge-small-en-v1.5",
+) -> BatchEmbedFn:
+    """Return an async batch embed function using local fastembed model.
+
+    Efficient for ingestion — embeds multiple texts in one call.
+    """
+    async def _embed_batch(texts: List[str]) -> List[List[float]]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, _local_embed_batch_sync, texts, model_name,
+        )
+
+    return _embed_batch
+
+
+def make_raw_vector_embedder(config: "LCMConfig") -> Optional[EmbedFn]:
+    """Return an embed function for raw vector retrieval, or None if disabled.
+
+    Uses local fastembed by default (raw_vector_use_local=True).
+    Falls back to API embedder if configured otherwise.
+    """
+    if not config.raw_vector_enabled:
+        return None
+
+    if config.raw_vector_use_local:
+        return make_local_embedder(config.raw_vector_model)
+
+    # Fall back to API embedder if local is disabled
+    if not config.embedding_base_url:
+        logger.warning(
+            "raw_vector_enabled=True, raw_vector_use_local=False, "
+            "but embedding_base_url is not set — raw vector retrieval disabled"
+        )
+        return None
+
+    return make_embedder(config)
+
+
+def make_raw_vector_batch_embedder(config: "LCMConfig") -> Optional[BatchEmbedFn]:
+    """Return a batch embed function for raw vector ingestion, or None if disabled."""
+    if not config.raw_vector_enabled:
+        return None
+
+    if config.raw_vector_use_local:
+        return make_local_batch_embedder(config.raw_vector_model)
+
+    # No batch API embedder yet — could be added later
+    return None
