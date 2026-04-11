@@ -21,7 +21,6 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
 
-from lossless_agent.store.database import Database
 from lossless_agent.store.factory import create_database
 from lossless_agent.config import LCMConfig
 from lossless_agent.store.conversation_store import ConversationStore
@@ -52,7 +51,7 @@ from lossless_agent.engine.fusion import reciprocal_rank_fusion
 logger = logging.getLogger(__name__)
 
 server = Server("lossless-agent")
-_db: Database | None = None
+_db: Any = None  # Database | PostgresDatabase | None
 _summarize_command: Optional[str] = None
 _config: Optional[LCMConfig] = None
 _vector_store: Optional[VectorStore] = None
@@ -440,7 +439,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             except Exception as exc:
                 logger.warning("Vector search failed, using FTS only: %s", exc)
 
-        payload = [_serialize(r) for r in fts_results]
+        payload = [_serialize(r) for r in fts_results]  # type: ignore[union-attr]
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
     elif name == "lcm_describe":
@@ -450,7 +449,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
 
     elif name == "lcm_expand":
-        result = lcm_expand(_db, summary_id=arguments["summary_id"], is_sub_agent=True)
+        result = lcm_expand(_db, summary_id=arguments["summary_id"], is_sub_agent=True) # type: ignore[assignment]
         if result is None:
             return [types.TextContent(type="text", text=json.dumps({"error": "summary not found"}))]
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
@@ -467,7 +466,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             sum_store=sum_store,
             expand_fn=_passthrough_summarize,
         )
-        result = await orch.expand_query(
+        result = await orch.expand_query( # type: ignore[assignment]
             conversation_id=arguments["conversation_id"],
             query=arguments["query"],
         )

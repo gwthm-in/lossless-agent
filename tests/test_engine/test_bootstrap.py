@@ -63,7 +63,7 @@ class TestSessionBootstrap:
         """Bootstrap should raise or return empty when parent doesn't exist."""
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize)
         new_conv = stores["conv"].get_or_create("new:session")
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             sb.bootstrap(new_conv.id, "nonexistent:parent")
         )
         assert result.summaries_imported == 0
@@ -80,7 +80,7 @@ class TestSessionBootstrap:
             )
         new_conv = stores["conv"].get_or_create("new:session")
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize, bootstrap_max_tokens=6000)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             sb.bootstrap(new_conv.id, "parent:session")
         )
         assert result.messages_imported > 0
@@ -111,7 +111,7 @@ class TestSessionBootstrap:
 
         new_conv = stores["conv"].get_or_create("new:session")
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize, bootstrap_max_tokens=6000)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             sb.bootstrap(new_conv.id, "parent:session")
         )
         assert result.summaries_imported > 0
@@ -127,7 +127,7 @@ class TestSessionBootstrap:
 
         new_conv = stores["conv"].get_or_create("new:session")
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize, bootstrap_max_tokens=500)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             sb.bootstrap(new_conv.id, "parent:session")
         )
         assert result.tokens_used <= 500
@@ -141,7 +141,7 @@ class TestSessionBootstrap:
         assert new_conv.bootstrapped_at is None
 
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             sb.bootstrap(new_conv.id, "parent:session")
         )
 
@@ -155,7 +155,7 @@ class TestSessionBootstrap:
 
         new_conv = stores["conv"].get_or_create("new:session")
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             sb.bootstrap(new_conv.id, "parent:session")
         )
 
@@ -210,7 +210,7 @@ class TestSessionBootstrap:
         new_conv = stores["conv"].get_or_create("new:session")
         # Small budget: should prefer the condensed summary
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize, bootstrap_max_tokens=30)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             sb.bootstrap(new_conv.id, "parent:session")
         )
         assert result.summaries_imported >= 1
@@ -221,7 +221,7 @@ class TestSessionBootstrap:
         stores["conv"].get_or_create("parent:session")
         new_conv = stores["conv"].get_or_create("new:session")
         sb = SessionBootstrap(db=db, summarize_fn=_dummy_summarize)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             sb.bootstrap(new_conv.id, "parent:session")
         )
         assert result.summaries_imported == 0
