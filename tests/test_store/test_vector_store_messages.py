@@ -4,7 +4,11 @@ All tests mock psycopg2 — no real Postgres connection required.
 """
 from __future__ import annotations
 
+import pytest
+
 from unittest.mock import MagicMock
+
+pytest.importorskip("psycopg2")
 
 from lossless_agent.store.vector_store import VectorStore
 
