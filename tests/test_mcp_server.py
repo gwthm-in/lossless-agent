@@ -138,13 +138,14 @@ def seeded(db):
 
 class TestListTools:
     @pytest.mark.asyncio
-    async def test_lists_nine_tools(self, seeded):
+    async def test_lists_ten_tools(self, seeded):
         tools = await mcp_mod.list_tools()
-        assert len(tools) == 9
+        assert len(tools) == 10
         names = {t.name for t in tools}
         assert names == {
             "lcm_grep", "lcm_describe", "lcm_expand", "lcm_stats", "lcm_expand_query",
             "lcm_ingest", "lcm_compact", "lcm_get_context", "lcm_session_end",
+            "lcm_backfill",
         }
 
 

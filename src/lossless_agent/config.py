@@ -81,6 +81,14 @@ class LCMConfig:
     cross_session_token_budget: int = 2000
     cross_session_min_score: float = 0.70  # discard hits below this cosine similarity
 
+    # Raw vector retrieval (embeds messages at ingestion time, no LLM calls)
+    raw_vector_enabled: bool = False  # opt-in; requires pgvector + database_dsn
+    raw_vector_model: str = "mixedbread-ai/mxbai-embed-large-v1"
+    raw_vector_dim: int = 1024
+    raw_vector_top_k: int = 20
+    raw_vector_min_score: float = 0.35
+    raw_vector_use_local: bool = True  # use fastembed (no API key needed)
+
     # ------------------------------------------------------------------
     # Env-var mapping
     # ------------------------------------------------------------------
@@ -129,6 +137,12 @@ class LCMConfig:
         "cross_session_top_k": ("LCM_CROSS_SESSION_TOP_K", int),
         "cross_session_token_budget": ("LCM_CROSS_SESSION_TOKEN_BUDGET", int),
         "cross_session_min_score": ("LCM_CROSS_SESSION_MIN_SCORE", float),
+        "raw_vector_enabled": ("LCM_RAW_VECTOR_ENABLED", _parse_bool),
+        "raw_vector_model": ("LCM_RAW_VECTOR_MODEL", str),
+        "raw_vector_dim": ("LCM_RAW_VECTOR_DIM", int),
+        "raw_vector_top_k": ("LCM_RAW_VECTOR_TOP_K", int),
+        "raw_vector_min_score": ("LCM_RAW_VECTOR_MIN_SCORE", float),
+        "raw_vector_use_local": ("LCM_RAW_VECTOR_USE_LOCAL", _parse_bool),
     }
 
     # ------------------------------------------------------------------
@@ -264,6 +278,16 @@ class LCMConfig:
             errors.append("delegation_timeout_ms must be >= 0")
         if self.new_session_retain_depth < 0:
             errors.append("new_session_retain_depth must be >= 0")
+        # Early validation: check fastembed is importable when needed
+        if self.raw_vector_enabled and self.raw_vector_use_local:
+            try:
+                import importlib
+                importlib.import_module("fastembed")
+            except ImportError:
+                errors.append(
+                    "raw_vector_use_local=True requires fastembed. "
+                    "Install with: pip install 'lossless-agent[local-embeddings]'"
+                )
         return errors
 
     @property

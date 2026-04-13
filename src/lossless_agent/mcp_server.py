@@ -13,14 +13,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 from dataclasses import asdict
-from typing import Any, Optional
+from typing import Any, List, Optional, cast
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
 
-from lossless_agent.store.database import Database
 from lossless_agent.store.factory import create_database
 from lossless_agent.config import LCMConfig
 from lossless_agent.store.conversation_store import ConversationStore
@@ -32,14 +32,31 @@ from lossless_agent.tools.recall import (
     lcm_grep,
     lcm_describe,
     lcm_expand,
+    GrepResult,
+    _truncate,
 )
 from lossless_agent.tools.expand_query import (
     ExpansionOrchestrator,
 )
 
+from lossless_agent.store.vector_store import VectorStore
+from lossless_agent.engine.embedder import (
+    BatchEmbedFn,
+    EmbedFn,
+    make_raw_vector_batch_embedder,
+    make_raw_vector_embedder,
+)
+from lossless_agent.engine.fusion import reciprocal_rank_fusion
+
+logger = logging.getLogger(__name__)
+
 server = Server("lossless-agent")
-_db: Database | None = None
+_db: Any = None  # Database | PostgresDatabase | None
 _summarize_command: Optional[str] = None
+_config: Optional[LCMConfig] = None
+_vector_store: Optional[VectorStore] = None
+_raw_embed_fn: Optional[EmbedFn] = None
+_raw_batch_embed_fn: Optional[BatchEmbedFn] = None
 
 
 def _serialize(obj: Any) -> Any:
@@ -314,6 +331,30 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["session_key"],
             },
         ),
+        types.Tool(
+            name="lcm_backfill",
+            description=(
+                "Embed existing messages that were stored before raw vector retrieval "
+                "was enabled. Iterates all unembedded messages in the database and "
+                "stores their vectors. Safe to re-run — skips already-embedded messages. "
+                "Only available when raw_vector_enabled=True."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "batch_size": {
+                        "type": "integer",
+                        "default": 256,
+                        "description": "Number of messages to embed per batch",
+                    },
+                    "conversation_id": {
+                        "type": ["integer", "null"],
+                        "default": None,
+                        "description": "Limit backfill to a single conversation (optional)",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -326,14 +367,79 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     assert _db is not None, "Database not initialized"
 
     if name == "lcm_grep":
-        results = lcm_grep(
+        query = arguments["query"]
+        scope = arguments.get("scope", "all")
+        conversation_id = arguments.get("conversation_id")
+        limit = arguments.get("limit", 20)
+
+        # FTS5 keyword search (existing)
+        fts_results = lcm_grep(
             _db,
-            query=arguments["query"],
-            scope=arguments.get("scope", "all"),
-            conversation_id=arguments.get("conversation_id"),
-            limit=arguments.get("limit", 20),
+            query=query,
+            scope=scope,
+            conversation_id=conversation_id,
+            limit=limit,
         )
-        payload = [_serialize(r) for r in results]
+
+        # Vector search (if raw vector retrieval is enabled)
+        if _vector_store and _raw_embed_fn and scope in ("all", "messages"):
+            try:
+                query_embedding = await _raw_embed_fn(query)
+                conv_ids = [conversation_id] if conversation_id else None
+                vec_hits = _vector_store.search_messages(
+                    query_embedding,
+                    top_k=_config.raw_vector_top_k if _config else 20,
+                    conversation_ids=conv_ids,
+                    min_score=_config.raw_vector_min_score if _config else 0.35,
+                )
+
+                if vec_hits:
+                    flat_fts = cast(List[GrepResult], fts_results)
+                    # Build FTS ranked list: (id, rank_score)
+                    fts_ranked = [(str(r.id), 1.0 / (i + 1)) for i, r in enumerate(flat_fts)]
+                    # Vec ranked list: (id, similarity)
+                    vec_ranked = [(mid, sim) for mid, sim in vec_hits]
+
+                    # Merge with RRF
+                    merged = reciprocal_rank_fusion(fts_ranked, vec_ranked, k=60)
+                    merged_ids = [doc_id for doc_id, _ in merged[:limit]]
+
+                    # Build a lookup of existing FTS results by ID
+                    fts_by_id = {str(r.id): r for r in flat_fts}
+
+                    # Fetch message content for vector-only hits
+                    vec_only_ids = [mid for mid in merged_ids if mid not in fts_by_id]
+                    vec_messages = {}
+                    if vec_only_ids:
+                        for mid in vec_only_ids:
+                            # message_id stored as str in pgvector; SQLite id is int
+                            row = _db.conn.execute(
+                                "SELECT id, conversation_id, content, role, seq, created_at "
+                                "FROM messages WHERE id = ?",
+                                (int(mid),),
+                            ).fetchone()
+                            if row:
+                                vec_messages[mid] = GrepResult(
+                                    type="message",
+                                    id=row[0],
+                                    content_snippet=_truncate(row[2]),
+                                    conversation_id=row[1],
+                                    metadata={"role": row[3], "seq": row[4], "source": "vector"},
+                                    created_at=row[5],
+                                )
+
+                    # Reorder results by RRF ranking
+                    reordered = []
+                    for doc_id in merged_ids:
+                        if doc_id in fts_by_id:
+                            reordered.append(fts_by_id[doc_id])
+                        elif doc_id in vec_messages:
+                            reordered.append(vec_messages[doc_id])
+                    fts_results = reordered
+            except Exception as exc:
+                logger.warning("Vector search failed, using FTS only: %s", exc)
+
+        payload = [_serialize(r) for r in fts_results]  # type: ignore[union-attr]
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
     elif name == "lcm_describe":
@@ -343,7 +449,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
 
     elif name == "lcm_expand":
-        result = lcm_expand(_db, summary_id=arguments["summary_id"], is_sub_agent=True)
+        result = lcm_expand(_db, summary_id=arguments["summary_id"], is_sub_agent=True) # type: ignore[assignment]
         if result is None:
             return [types.TextContent(type="text", text=json.dumps({"error": "summary not found"}))]
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
@@ -360,7 +466,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             sum_store=sum_store,
             expand_fn=_passthrough_summarize,
         )
-        result = await orch.expand_query(
+        result = await orch.expand_query( # type: ignore[assignment]
             conversation_id=arguments["conversation_id"],
             query=arguments["query"],
         )
@@ -415,6 +521,9 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     elif name == "lcm_session_end":
         return await _handle_session_end(arguments)
 
+    elif name == "lcm_backfill":
+        return await _handle_backfill(arguments)
+
     else:
         return [types.TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
 
@@ -449,6 +558,29 @@ async def _handle_ingest(arguments: dict) -> list[types.TextContent]:
         )
         ingested.append({"id": m.id, "seq": m.seq, "role": m.role})
 
+    # Embed messages at ingestion time (raw vector retrieval)
+    embedded_count = 0
+    if _vector_store and _raw_batch_embed_fn:
+        try:
+            texts = []
+            msg_ids = []
+            for msg_data, ing in zip(raw_messages, ingested):
+                content = msg_data.get("content", "")
+                if content and content.strip():
+                    texts.append(content)
+                    msg_ids.append(ing["id"])
+
+            if texts:
+                embeddings = await _raw_batch_embed_fn(texts)
+                items = [
+                    (str(mid), conv.id, emb)
+                    for mid, emb in zip(msg_ids, embeddings)
+                ]
+                _vector_store.store_messages_batch(items)
+                embedded_count = len(items)
+        except Exception as exc:
+            logger.warning("Failed to embed messages at ingestion: %s", exc)
+
     # Run incremental compaction if needed
     sum_store = SummaryStore(_db)
     summarize_fn = _get_summarize_fn()
@@ -465,6 +597,7 @@ async def _handle_ingest(arguments: dict) -> list[types.TextContent]:
         "status": "ok",
         "conversation_id": conv.id,
         "messages_ingested": len(ingested),
+        "messages_embedded": embedded_count,
         "messages": ingested,
         "summaries_created": compacted_count,
     }
@@ -558,14 +691,125 @@ async def _handle_session_end(arguments: dict) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
+async def _handle_backfill(arguments: dict) -> list[types.TextContent]:
+    """Embed all messages that don't yet have a vector — idempotent."""
+    assert _db is not None
+
+    if not _vector_store or not _raw_batch_embed_fn:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"error": "raw vector retrieval not enabled or no vector store configured"}),
+        )]
+
+    batch_size = int(arguments.get("batch_size") or 256)
+    filter_conv = arguments.get("conversation_id")
+
+    conn = _db.conn
+    if filter_conv is not None:
+        rows = conn.execute(
+            "SELECT id, content FROM messages WHERE conversation_id = ? ORDER BY id",
+            (filter_conv,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, content FROM messages ORDER BY id"
+        ).fetchall()
+
+    # Fetch already-embedded message IDs from pgvector
+    existing_ids: set[str] = set()
+    try:
+        pg_conn = _vector_store._get_conn()
+        cur = pg_conn.cursor()
+        cur.execute("SELECT message_id FROM message_embeddings")
+        existing_ids = {row[0] for row in cur.fetchall()}
+        cur.close()
+    except Exception as exc:
+        logger.warning("Could not fetch existing embeddings for backfill check: %s", exc)
+
+    # Filter to unembedded messages with non-empty content
+    todo = [
+        (row[0], row[1]) for row in rows
+        if row[1] and row[1].strip() and str(row[0]) not in existing_ids
+    ]
+
+    if not todo:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"status": "ok", "embedded": 0, "skipped": len(rows)}),
+        )]
+
+    # Get conversation_id for each message
+    msg_conv = {}
+    if filter_conv is not None:
+        msg_conv = {row[0]: filter_conv for row in rows}
+    else:
+        conv_rows = conn.execute("SELECT id, conversation_id FROM messages").fetchall()
+        msg_conv = {r[0]: r[1] for r in conv_rows}
+
+    embedded = 0
+    failed = 0
+    for i in range(0, len(todo), batch_size):
+        batch = todo[i : i + batch_size]
+        ids = [r[0] for r in batch]
+        texts = [r[1] for r in batch]
+        try:
+            embeddings = await _raw_batch_embed_fn(texts)
+            items = [
+                (str(mid), msg_conv.get(mid, 0), emb)
+                for mid, emb in zip(ids, embeddings)
+            ]
+            _vector_store.store_messages_batch(items)
+            embedded += len(items)
+        except Exception as exc:
+            logger.warning("Backfill batch %d failed: %s", i // batch_size, exc)
+            failed += len(batch)
+
+    return [types.TextContent(
+        type="text",
+        text=json.dumps({
+            "status": "ok",
+            "embedded": embedded,
+            "failed": failed,
+            "skipped": len(rows) - len(todo),
+        }),
+    )]
+
+
 # ------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------
 
 async def main(db_path: str, db_dsn: str = "") -> None:
-    global _db
+    global _db, _config, _vector_store, _raw_embed_fn, _raw_batch_embed_fn
     cfg = LCMConfig(db_path=db_path, database_dsn=db_dsn)
+    _config = cfg
     _db = create_database(cfg)
+
+    # Initialize raw vector retrieval if configured
+    if cfg.raw_vector_enabled and cfg.database_dsn:
+        try:
+            _vector_store = VectorStore(
+                dsn=cfg.database_dsn,
+                dim=cfg.embedding_dim,
+                msg_dim=cfg.raw_vector_dim,
+            )
+            _raw_embed_fn = make_raw_vector_embedder(cfg)
+            _raw_batch_embed_fn = make_raw_vector_batch_embedder(cfg)
+            import logging
+            logging.getLogger(__name__).info(
+                "Raw vector retrieval enabled (model=%s, dim=%d)",
+                cfg.raw_vector_model,
+                cfg.raw_vector_dim,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to initialize raw vector retrieval: %s", exc
+            )
+            _vector_store = None
+            _raw_embed_fn = None
+            _raw_batch_embed_fn = None
+
     try:
         async with stdio_server() as (read_stream, write_stream):
             await server.run(
@@ -574,6 +818,8 @@ async def main(db_path: str, db_dsn: str = "") -> None:
                 server.create_initialization_options(),
             )
     finally:
+        if _vector_store:
+            _vector_store.close()
         _db.close()
 
 

@@ -44,7 +44,7 @@ def conversation_id(db):
 class TestSmallContentPassthrough:
     def test_small_content_passes_through_unchanged(self, interceptor, conversation_id):
         content = "Small content"
-        result_content, file_id = asyncio.get_event_loop().run_until_complete(
+        result_content, file_id = asyncio.run(
             interceptor.intercept(conversation_id, content, token_count=10)
         )
         assert result_content == content
@@ -53,7 +53,7 @@ class TestSmallContentPassthrough:
     def test_summarize_fn_not_called_for_small_content(
         self, interceptor, summarize_fn, conversation_id
     ):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             interceptor.intercept(conversation_id, "tiny", token_count=5)
         )
         summarize_fn.assert_not_called()
@@ -62,7 +62,7 @@ class TestSmallContentPassthrough:
 class TestLargeContentInterception:
     def test_large_content_gets_intercepted(self, interceptor, conversation_id):
         big = "x" * 50000
-        result_content, file_id = asyncio.get_event_loop().run_until_complete(
+        result_content, file_id = asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         assert file_id is not None
@@ -70,7 +70,7 @@ class TestLargeContentInterception:
 
     def test_replacement_format(self, interceptor, conversation_id, summarize_fn):
         big = "x" * 50000
-        result_content, file_id = asyncio.get_event_loop().run_until_complete(
+        result_content, file_id = asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         assert f"file_id={file_id}" in result_content
@@ -81,7 +81,7 @@ class TestLargeContentInterception:
         self, interceptor, summarize_fn, conversation_id, config
     ):
         big = "x" * 50000
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         summarize_fn.assert_called_once_with(big, config.summary_target_tokens)
@@ -90,7 +90,7 @@ class TestLargeContentInterception:
 class TestGetFile:
     def test_get_file_retrieves_stored_content(self, interceptor, conversation_id):
         big = "stored content " * 5000
-        _, file_id = asyncio.get_event_loop().run_until_complete(
+        _, file_id = asyncio.run(
             interceptor.intercept(conversation_id, big, token_count=30000)
         )
         result = interceptor.get_file(file_id)
@@ -104,7 +104,7 @@ class TestGetFile:
 
     def test_get_files_for_conversation(self, interceptor, conversation_id):
         for i in range(3):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 interceptor.intercept(
                     conversation_id, f"big content {i}" * 5000, token_count=30000
                 )
@@ -134,10 +134,10 @@ class TestMultipleConversations:
             "SELECT id FROM conversations WHERE session_key='sess_b'"
         ).fetchone()[0]
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             interceptor.intercept(conv_a, "big a" * 10000, token_count=30000)
         )
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             interceptor.intercept(conv_b, "big b" * 10000, token_count=30000)
         )
 

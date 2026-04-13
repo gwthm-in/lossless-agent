@@ -28,15 +28,14 @@ import sys
 import time
 import tempfile
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 # Add parent to path for lossless-agent
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from lossless_agent.adapters.simple import SimpleAdapter
-from lossless_agent.config import LCMConfig
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +394,7 @@ async def run_benchmark(config: BenchmarkConfig):
         avg_answer = sum(r.time_answer for r in results) / len(results)
         avg_hits = sum(r.retrieval_hits for r in results) / len(results)
         avg_summaries = sum(r.num_summaries_created for r in results) / len(results)
-        print(f"\nAverage times:")
+        print("\nAverage times:")
         print(f"  Ingest:   {avg_ingest:.2f}s")
         print(f"  Compact:  {avg_compact:.2f}s")
         print(f"  Retrieve: {avg_retrieve:.2f}s")
@@ -404,7 +403,7 @@ async def run_benchmark(config: BenchmarkConfig):
         print(f"\nAverage retrieval hits: {avg_hits:.1f}")
         print(f"Average summaries created: {avg_summaries:.1f}")
 
-    print(f"\nLLM usage:")
+    print("\nLLM usage:")
     print(f"  Calls: {llm.total_calls}")
     print(f"  Input tokens: {llm.total_input_tokens:,}")
     print(f"  Output tokens: {llm.total_output_tokens:,}")
@@ -507,7 +506,7 @@ Does the model response contain the correct answer? Answer yes or no only."""
     print(f"EVALUATION RESULTS (judge: {config.judge_model})")
     print(f"{'=' * 60}")
     print(f"\nOverall accuracy: {correct}/{total} = {correct/total*100:.1f}%")
-    print(f"\nBy question type:")
+    print("\nBy question type:")
     type_accs = []
     for qtype, counts in sorted(by_type.items()):
         acc = counts["correct"] / counts["total"] * 100 if counts["total"] > 0 else 0

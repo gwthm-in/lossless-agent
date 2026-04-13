@@ -21,8 +21,6 @@ import time
 import tempfile
 import shutil
 from pathlib import Path
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
 
 # Load .env
 _env_path = Path(__file__).parent.parent / "longmemeval" / ".env"
@@ -36,9 +34,9 @@ if _env_path.exists():
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-import anthropic
-from agentmemory import MemoryStore
-from lossless_agent.adapters.simple import SimpleAdapter
+import anthropic  # noqa: E402
+from agentmemory import MemoryStore  # noqa: E402
+from lossless_agent.adapters.simple import SimpleAdapter  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Config
@@ -217,7 +215,7 @@ async def process_lossless(conversation: list, session_key: str) -> dict:
             "tmp_dir": tmp_dir,
             "session_key": session_key,
         }
-    except Exception as e:
+    except Exception:
         adapter.close()
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
@@ -473,9 +471,12 @@ async def main():
             am_answer = await answer_from_context(am_result["compressed_context"], qtxt)
             am_is_correct = await judge_answer(qtxt, ans, am_answer)
             
-            if lcm_is_correct: lcm_correct += 1
-            if lcm_exp_correct: lcm_expanded_correct += 1
-            if am_is_correct: am_correct += 1
+            if lcm_is_correct:
+                lcm_correct += 1
+            if lcm_exp_correct:
+                lcm_expanded_correct += 1
+            if am_is_correct:
+                am_correct += 1
             
             status_lcm = "Y" if lcm_is_correct else "N"
             status_exp = "Y" if lcm_exp_correct else "N"
@@ -502,8 +503,10 @@ async def main():
         for snip in snippets:
             lcm_found = check_verbatim_recovery(lcm_result["compressed_context"], snip["snippet"])
             am_found = check_verbatim_recovery(am_result["compressed_context"], snip["snippet"])
-            if lcm_found: lcm_verbatim += 1
-            if am_found: am_verbatim += 1
+            if lcm_found:
+                lcm_verbatim += 1
+            if am_found:
+                am_verbatim += 1
         
         total_snippets = len(snippets)
         print(f"    Verbatim: LCM={lcm_verbatim}/{total_snippets} AM={am_verbatim}/{total_snippets}")
@@ -581,9 +584,12 @@ async def main():
             if t not in type_stats:
                 type_stats[t] = {"lcm": 0, "lcm_exp": 0, "am": 0, "total": 0}
             type_stats[t]["total"] += 1
-            if q["lcm_correct"]: type_stats[t]["lcm"] += 1
-            if q["lcm_expanded_correct"]: type_stats[t]["lcm_exp"] += 1
-            if q["am_correct"]: type_stats[t]["am"] += 1
+            if q["lcm_correct"]:
+                type_stats[t]["lcm"] += 1
+            if q["lcm_expanded_correct"]:
+                type_stats[t]["lcm_exp"] += 1
+            if q["am_correct"]:
+                type_stats[t]["am"] += 1
     
     report = f"""# Lossless Context Benchmark (LCB) Report
 

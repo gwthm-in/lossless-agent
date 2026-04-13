@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local-embeddings = [
+    "fastembed>=0.3",
+]
 postgres = [
     "psycopg2-binary>=2.9",
 ]
@@ -42,3 +45,14 @@ target-version = "py39"
 python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "psycopg2",
+    "psycopg2.*",
+    "mcp",
+    "mcp.*",
+    "fastembed",
+    "fastembed.*",
+]
+ignore_missing_imports = true

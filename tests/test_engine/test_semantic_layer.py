@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 from lossless_agent.engine.assembler import AssemblerConfig, ContextAssembler
-from lossless_agent.engine.compaction import CompactionEngine, CompactionConfig
+from lossless_agent.engine.compaction import CompactionEngine
 from lossless_agent.store.models import Summary
 
 
