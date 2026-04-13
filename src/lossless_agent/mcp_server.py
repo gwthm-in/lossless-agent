@@ -92,21 +92,20 @@ def _make_openai_summarizer(model: str, base_url: str = "") -> SummarizeFn:
         base_url: Optional custom base URL. Defaults to the OpenAI API.
                   Set to your LiteLLM proxy URL for custom deployments.
     """
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        raise ImportError(
+            "LCM_SUMMARY_PROVIDER=openai requires the openai package. "
+            "Install with: pip install openai"
+        )
     _model = model or "gpt-4o-mini"
-    _base_url = base_url or None  # None → openai SDK uses its default
+    kwargs: dict = {}
+    if base_url:
+        kwargs["base_url"] = base_url
+    client = AsyncOpenAI(**kwargs)
 
     async def summarize(prompt: str) -> str:
-        try:
-            from openai import AsyncOpenAI
-        except ImportError:
-            raise ImportError(
-                "LCM_SUMMARY_PROVIDER=openai requires the openai package. "
-                "Install with: pip install openai"
-            )
-        kwargs: dict = {}
-        if _base_url:
-            kwargs["base_url"] = _base_url
-        client = AsyncOpenAI(**kwargs)
         resp = await client.chat.completions.create(
             model=_model,
             max_tokens=4096,
@@ -123,17 +122,17 @@ def _make_anthropic_summarizer(model: str) -> SummarizeFn:
     Requires ANTHROPIC_API_KEY in the environment and the ``anthropic``
     package (``pip install anthropic``).
     """
+    try:
+        import anthropic as _anthropic
+    except ImportError:
+        raise ImportError(
+            "LCM_SUMMARY_PROVIDER=anthropic requires the anthropic package. "
+            "Install with: pip install anthropic"
+        )
     _model = model or "claude-haiku-4-5-20251001"
+    client = _anthropic.AsyncAnthropic()
 
     async def summarize(prompt: str) -> str:
-        try:
-            import anthropic as _anthropic
-        except ImportError:
-            raise ImportError(
-                "LCM_SUMMARY_PROVIDER=anthropic requires the anthropic package. "
-                "Install with: pip install anthropic"
-            )
-        client = _anthropic.AsyncAnthropic()
         message = await client.messages.create(
             model=_model,
             max_tokens=4096,
