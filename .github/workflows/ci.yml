@@ -83,14 +83,14 @@ jobs:
 
       - name: Build docs
         run: |
-          mkdocs build --config-file docs/mkdocs.yml --site-dir ../site
+          mkdocs build --config-file docs/mkdocs.yml --site-dir ${{ github.workspace }}/_site
           # Copy extra static assets that mkdocs doesn't auto-include
-          cp docs/visualization.html ../site/visualization.html
+          cp docs/visualization.html ${{ github.workspace }}/_site/visualization.html
 
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment
