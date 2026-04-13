@@ -72,14 +72,47 @@ The MCP server uses deterministic truncation by default for compaction
 summaries. This preserves the DAG structure — original messages are always
 recoverable via `lcm_expand`, even if summary text is truncated.
 
-For LLM-quality summaries, use `--summarize-command`:
+For LLM-quality summaries, choose one of three approaches:
+
+**Option A — Environment variables (recommended)**
+
+Set `LCM_SUMMARY_PROVIDER` and `LCM_SUMMARY_MODEL` before starting the server.
+The server picks them up automatically via `LCMConfig.from_env()`.
+
+```bash
+# Anthropic
+export LCM_SUMMARY_PROVIDER=anthropic
+export LCM_SUMMARY_MODEL=claude-haiku-4-5-20251001
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI
+export LCM_SUMMARY_PROVIDER=openai
+export LCM_SUMMARY_MODEL=gpt-4o-mini
+export OPENAI_API_KEY=sk-...
+
+# LiteLLM proxy (any model, any backend)
+export LCM_SUMMARY_PROVIDER=openai
+export LCM_SUMMARY_BASE_URL=http://localhost:4000
+export LCM_SUMMARY_MODEL=anthropic/claude-haiku-4-5-20251001
+```
+
+`lcm_expand_query` uses `LCM_EXPANSION_MODEL` for synthesis; falls back to
+`LCM_SUMMARY_MODEL` when not set.
+
+**Option B — `--summarize-command`**
 
 ```bash
 lossless-agent-mcp --db-path ./data/lcm.db --summarize-command 'python my_summarizer.py'
 ```
 
-The command receives the summarization prompt on stdin and should write
-the summary to stdout.
+The command receives the summarisation prompt on stdin and writes the summary
+to stdout. Takes precedence over env-var provider config.
+
+**Option C — Truncation fallback (default)**
+
+When neither provider nor command is configured, summaries are truncated to
+fit the token budget. The DAG is preserved — `lcm_expand` always recovers
+the originals.
 
 ---
 
@@ -305,6 +338,69 @@ await adapter.on_session_end(session_id)
 ```
 
 See: [`examples/framework_integration.py`](../examples/framework_integration.py)
+
+---
+
+## 7. Hermes
+
+**Mode:** MCP Server
+
+Hermes agents connect to `lossless-agent-mcp` over stdio using the `hermes mcp add` command.
+
+### Install
+
+On the Hermes machine:
+
+```bash
+pip install 'lossless-agent[postgres]'   # or just lossless-agent for SQLite
+pip install 'mcp[cli]'
+```
+
+### Register the MCP server
+
+**SQLite (local, single-machine):**
+
+```bash
+hermes mcp add lossless-agent \
+  --command lossless-agent-mcp \
+  --args "--db-path ~/.lossless-agent/lcm.db"
+```
+
+**Postgres (shared across agents or machines):**
+
+```bash
+hermes mcp add lossless-agent \
+  --command lossless-agent-mcp \
+  --args "--db-dsn postgresql://user:pass@host/lossless_agent"
+```
+
+### Configure summarisation
+
+Add to `~/.hermes/.env` (or your Hermes env config):
+
+```bash
+LCM_SUMMARY_PROVIDER=anthropic
+LCM_SUMMARY_MODEL=claude-haiku-4-5-20251001
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Or via LiteLLM proxy:
+# LCM_SUMMARY_PROVIDER=openai
+# LCM_SUMMARY_BASE_URL=http://localhost:4000
+# LCM_SUMMARY_MODEL=anthropic/claude-haiku-4-5-20251001
+```
+
+### Add CLAUDE.md instructions
+
+In the agent's CLAUDE.md, add the recall instructions so the agent uses
+the tools correctly:
+
+```markdown
+## Memory (lossless-agent)
+
+At session start: call `lcm_get_context(session_key="<session_id>", max_tokens=8000)`.
+After each turn: the Stop hook ingests automatically — do NOT call `lcm_ingest` manually.
+To recall from past sessions: use `lcm_grep(query="...")`.
+```
 
 ---
 
