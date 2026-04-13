@@ -4,9 +4,14 @@ Provides both read-only recall tools (grep, describe, expand) and
 write tools for the full conversation lifecycle (ingest, compact,
 get_context, session_end).
 
-The write tools use a deterministic truncation summarizer by default.
-For higher-quality summaries, pass --summarize-command to pipe text
-through an external LLM-backed command.
+Summarizer selection (first match wins):
+  1. --summarize-command CLI flag  — pipe prompt to external command
+  2. LCM_SUMMARY_PROVIDER=anthropic — call Claude via Anthropic SDK
+       requires: ANTHROPIC_API_KEY, LCM_SUMMARY_MODEL (default: claude-haiku-4-5-20251001)
+  3. deterministic truncation fallback (no LLM, lower quality)
+
+Expansion model for lcm_expand_query:
+  LCM_EXPANSION_MODEL (default: same as LCM_SUMMARY_MODEL)
 """
 from __future__ import annotations
 
@@ -72,6 +77,33 @@ def _serialize(obj: Any) -> Any:
 # Summarizer factory
 # ------------------------------------------------------------------
 
+def _make_anthropic_summarizer(model: str) -> SummarizeFn:
+    """Summarizer that calls the Anthropic API directly.
+
+    Requires ANTHROPIC_API_KEY in the environment and the ``anthropic``
+    package (``pip install anthropic``).
+    """
+    _model = model or "claude-haiku-4-5-20251001"
+
+    async def summarize(prompt: str) -> str:
+        try:
+            import anthropic as _anthropic
+        except ImportError:
+            raise ImportError(
+                "LCM_SUMMARY_PROVIDER=anthropic requires the anthropic package. "
+                "Install with: pip install anthropic"
+            )
+        client = _anthropic.AsyncAnthropic()
+        message = await client.messages.create(
+            model=_model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text  # type: ignore[union-attr]
+
+    return summarize
+
+
 def _make_truncation_summarizer() -> SummarizeFn:
     """Built-in deterministic summarizer: truncates to target length.
 
@@ -118,9 +150,28 @@ def _make_command_summarizer(command: str) -> SummarizeFn:
 
 
 def _get_summarize_fn() -> SummarizeFn:
-    """Return the configured summarize function."""
+    """Return the configured summarize function (first match wins):
+    1. --summarize-command CLI flag
+    2. LCM_SUMMARY_PROVIDER=anthropic
+    3. deterministic truncation fallback
+    """
     if _summarize_command:
         return _make_command_summarizer(_summarize_command)
+    if _config and _config.summary_provider == "anthropic":
+        return _make_anthropic_summarizer(_config.summary_model)
+    return _make_truncation_summarizer()
+
+
+def _get_expansion_fn() -> SummarizeFn:
+    """Return the summarize function to use for lcm_expand_query synthesis.
+
+    Uses LCM_EXPANSION_MODEL if set, falls back to the summary model/provider.
+    """
+    if _summarize_command:
+        return _make_command_summarizer(_summarize_command)
+    if _config and _config.summary_provider == "anthropic":
+        model = _config.expansion_model or _config.summary_model
+        return _make_anthropic_summarizer(model)
     return _make_truncation_summarizer()
 
 
@@ -455,16 +506,13 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
 
     elif name == "lcm_expand_query":
-        async def _passthrough_summarize(prompt: str) -> str:
-            return prompt
-
         msg_store = MessageStore(_db)
         sum_store = SummaryStore(_db)
         orch = ExpansionOrchestrator(
             db=_db,
             msg_store=msg_store,
             sum_store=sum_store,
-            expand_fn=_passthrough_summarize,
+            expand_fn=_get_expansion_fn(),
         )
         result = await orch.expand_query( # type: ignore[assignment]
             conversation_id=arguments["conversation_id"],
@@ -781,7 +829,15 @@ async def _handle_backfill(arguments: dict) -> list[types.TextContent]:
 
 async def main(db_path: str, db_dsn: str = "") -> None:
     global _db, _config, _vector_store, _raw_embed_fn, _raw_batch_embed_fn
-    cfg = LCMConfig(db_path=db_path, database_dsn=db_dsn)
+    # Start from env vars, then apply CLI overrides on top
+    cfg = LCMConfig.from_env()
+    overrides: dict = {}
+    if db_path:
+        overrides["db_path"] = db_path
+    if db_dsn:
+        overrides["database_dsn"] = db_dsn
+    if overrides:
+        cfg = LCMConfig.merge(cfg, overrides)
     _config = cfg
     _db = create_database(cfg)
 
