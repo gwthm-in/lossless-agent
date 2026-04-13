@@ -237,30 +237,55 @@ def create_embedder(config: LCMConfig) -> Optional[Embedder]: ...
 ```python
 @dataclass
 class LCMConfig:
+    # Core
     enabled: bool = True
     db_path: str = "~/.lossless-agent/lcm.db"
-    fresh_tail_count: int = 8
-    leaf_chunk_tokens: int = 20_000
-    leaf_min_fanout: int = 4
-    condensed_min_fanout: int = 3
-    context_threshold: float = 0.75
-    leaf_target_tokens: int = 1200
-    condensed_target_tokens: int = 2000
+    database_dsn: str = ""            # Postgres DSN; when set, uses Postgres
     max_context_tokens: int = 128_000
-    summary_budget_ratio: float = 0.4
-    summary_model: str = ""
-    summary_provider: str = ""
-    expansion_model: str = ""
     ignore_session_patterns: List[str] = field(default_factory=list)
+
+    # Compaction
+    fresh_tail_count: int = 64
+    leaf_chunk_tokens: int = 20_000
+    leaf_min_fanout: int = 8
+    condensed_min_fanout: int = 4
+    context_threshold: float = 0.75
+    leaf_target_tokens: int = 2400
+    condensed_target_tokens: int = 2000
     incremental_max_depth: int = 1
     summary_timeout_ms: int = 60_000
+    circuit_breaker_threshold: int = 5
+    circuit_breaker_cooldown_ms: int = 1_800_000
+
+    # Summarisation
+    summary_provider: str = ""        # "anthropic", "openai", or "" (truncation)
+    summary_model: str = ""           # model name; provider default used when empty
+    summary_base_url: str = ""        # OpenAI-compatible base URL (e.g. LiteLLM proxy)
+    expansion_model: str = ""         # for lcm_expand_query; falls back to summary_model
+    summary_budget_ratio: float = 0.4
+
+    # Context assembly
+    max_assembly_token_budget: Optional[int] = None
+    custom_instructions: str = ""
+    timezone: str = ""
+
+    # Cross-session semantic retrieval (requires pgvector)
     cross_session_enabled: bool = False
     embedding_base_url: str = ""
-    embedding_model: str = ""
+    embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536
-    embedding_api_key: str = ""
+    embedding_api_key: str = ""       # falls back to OPENAI_API_KEY
     cross_session_top_k: int = 5
     cross_session_token_budget: int = 2000
+    cross_session_min_score: float = 0.70
+
+    # Raw vector retrieval (local embeddings, requires pgvector)
+    raw_vector_enabled: bool = False
+    raw_vector_model: str = "mixedbread-ai/mxbai-embed-large-v1"
+    raw_vector_dim: int = 1024
+    raw_vector_top_k: int = 20
+    raw_vector_min_score: float = 0.35
+    raw_vector_use_local: bool = True  # use fastembed; False = API endpoint
 
     @classmethod
     def from_env(cls) -> LCMConfig: ...
@@ -273,4 +298,6 @@ class LCMConfig:
     def to_assembler_config(self) -> AssemblerConfig: ...
     @property
     def resolved_db_path(self) -> str: ...
+    @property
+    def effective_bootstrap_max_tokens(self) -> int: ...
 ```
