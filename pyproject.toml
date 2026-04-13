@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local-embeddings = [
+    "fastembed>=0.3",
+]
 postgres = [
     "psycopg2-binary>=2.9",
 ]

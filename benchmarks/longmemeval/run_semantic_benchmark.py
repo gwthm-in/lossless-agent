@@ -9,7 +9,7 @@ Strategy:
 2. At query time: embed question → vector search for top-K messages
 3. Augment with FTS5 hits + session context → answer
 
-Uses local fastembed (BAAI/bge-small-en-v1.5, dim=384) for embeddings.
+Uses local fastembed (mixedbread-ai/mxbai-embed-large-v1, dim=1024) for embeddings.
 Uses Postgres+pgvector for vector storage.
 Uses claude-haiku-4-5 via litellm proxy for LLM calls.
 
@@ -67,8 +67,8 @@ JUDGE_MODEL = "claude-haiku-4-5"
 CONTEXT_BUDGET = 120000  # tokens
 
 # Embedding config (local fastembed)
-EMBEDDING_DIM = 384
-EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+EMBEDDING_DIM = 1024
+EMBEDDING_MODEL_NAME = "mixedbread-ai/mxbai-embed-large-v1"
 
 # Semantic search config
 SEMANTIC_TOP_K = 30  # top messages from vector search

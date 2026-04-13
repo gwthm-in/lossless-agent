@@ -4,8 +4,9 @@ Supports any OpenAI-compatible HTTP endpoint (OpenAI, LiteLLM proxy,
 Ollama, etc.). No hard dependency on openai SDK — uses urllib.request
 in a thread-pool executor so it doesn't block the event loop.
 
-Also supports local embeddings via fastembed (BAAI/bge-small-en-v1.5)
-for zero-cost, zero-latency embedding at ingestion time.
+Also supports local embeddings via fastembed (mixedbread-ai/mxbai-embed-large-v1)
+for zero-cost, zero-latency embedding at ingestion time. Requires the
+``local-embeddings`` optional extra: ``pip install 'lossless-agent[local-embeddings]'``
 """
 from __future__ import annotations
 
@@ -92,7 +93,7 @@ _local_model = None          # lazy singleton
 _local_model_name: str = ""  # tracks which model is loaded
 
 
-def _get_local_model(model_name: str = "BAAI/bge-small-en-v1.5"):
+def _get_local_model(model_name: str = "mixedbread-ai/mxbai-embed-large-v1"):
     """Lazy-load the fastembed model (singleton to avoid re-downloading).
 
     Re-loads if *model_name* differs from the currently loaded model so
@@ -107,8 +108,8 @@ def _get_local_model(model_name: str = "BAAI/bge-small-en-v1.5"):
             _local_model_name = model_name
         except ImportError:
             raise ImportError(
-                "fastembed is required for local embeddings. "
-                "Install with: pip install fastembed"
+                "raw_vector_use_local=True requires fastembed. "
+                "Install with: pip install 'lossless-agent[local-embeddings]'"
             )
     return _local_model
 
@@ -130,12 +131,12 @@ def _local_embed_batch_sync(texts: List[str], model_name: str) -> List[List[floa
 
 
 def make_local_embedder(
-    model_name: str = "BAAI/bge-small-en-v1.5",
+    model_name: str = "mixedbread-ai/mxbai-embed-large-v1",
 ) -> EmbedFn:
     """Return an async embed function using local fastembed model.
 
-    No API key needed. No network calls. Uses BAAI/bge-small-en-v1.5
-    (384 dimensions) by default.
+    No API key needed. No network calls. Uses mixedbread-ai/mxbai-embed-large-v1
+    (1024 dimensions) by default.
     """
     async def _embed(text: str) -> List[float]:
         loop = asyncio.get_running_loop()
@@ -147,7 +148,7 @@ def make_local_embedder(
 
 
 def make_local_batch_embedder(
-    model_name: str = "BAAI/bge-small-en-v1.5",
+    model_name: str = "mixedbread-ai/mxbai-embed-large-v1",
 ) -> BatchEmbedFn:
     """Return an async batch embed function using local fastembed model.
 

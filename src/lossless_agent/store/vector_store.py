@@ -36,7 +36,7 @@ class VectorStore:
         )
     """
 
-    def __init__(self, dsn: str, dim: int = 1536, msg_dim: int = 384) -> None:
+    def __init__(self, dsn: str, dim: int = 1536, msg_dim: int = 1024) -> None:
         import psycopg2  # noqa: F401 — fail fast if not installed
 
         self._dsn = dsn

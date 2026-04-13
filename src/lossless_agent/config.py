@@ -83,8 +83,8 @@ class LCMConfig:
 
     # Raw vector retrieval (embeds messages at ingestion time, no LLM calls)
     raw_vector_enabled: bool = False  # opt-in; requires pgvector + database_dsn
-    raw_vector_model: str = "BAAI/bge-small-en-v1.5"
-    raw_vector_dim: int = 384
+    raw_vector_model: str = "mixedbread-ai/mxbai-embed-large-v1"
+    raw_vector_dim: int = 1024
     raw_vector_top_k: int = 20
     raw_vector_min_score: float = 0.35
     raw_vector_use_local: bool = True  # use fastembed (no API key needed)
@@ -278,6 +278,16 @@ class LCMConfig:
             errors.append("delegation_timeout_ms must be >= 0")
         if self.new_session_retain_depth < 0:
             errors.append("new_session_retain_depth must be >= 0")
+        # Early validation: check fastembed is importable when needed
+        if self.raw_vector_enabled and self.raw_vector_use_local:
+            try:
+                import importlib
+                importlib.import_module("fastembed")
+            except ImportError:
+                errors.append(
+                    "raw_vector_use_local=True requires fastembed. "
+                    "Install with: pip install 'lossless-agent[local-embeddings]'"
+                )
         return errors
 
     @property
