@@ -592,7 +592,6 @@ class TestTruncationSummarizer:
 
 def _make_fake_openai(mock_client):
     """Build a fake openai module with AsyncOpenAI returning mock_client."""
-    import sys
     from unittest.mock import MagicMock
     fake = MagicMock()
     fake.AsyncOpenAI = MagicMock(return_value=mock_client)
