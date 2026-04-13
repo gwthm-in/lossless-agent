@@ -8,7 +8,11 @@ Summarizer selection (first match wins):
   1. --summarize-command CLI flag  — pipe prompt to external command
   2. LCM_SUMMARY_PROVIDER=anthropic — call Claude via Anthropic SDK
        requires: ANTHROPIC_API_KEY, LCM_SUMMARY_MODEL (default: claude-haiku-4-5-20251001)
-  3. deterministic truncation fallback (no LLM, lower quality)
+  3. LCM_SUMMARY_PROVIDER=openai — call any OpenAI-compatible endpoint
+       requires: OPENAI_API_KEY, LCM_SUMMARY_MODEL
+       optional: LCM_SUMMARY_BASE_URL (default: https://api.openai.com/v1)
+       works with: LiteLLM proxies, Azure OpenAI, Groq, etc.
+  4. deterministic truncation fallback (no LLM, lower quality)
 
 Expansion model for lcm_expand_query:
   LCM_EXPANSION_MODEL (default: same as LCM_SUMMARY_MODEL)
@@ -76,6 +80,42 @@ def _serialize(obj: Any) -> Any:
 # ------------------------------------------------------------------
 # Summarizer factory
 # ------------------------------------------------------------------
+
+def _make_openai_summarizer(model: str, base_url: str = "") -> SummarizeFn:
+    """Summarizer that calls any OpenAI-compatible endpoint.
+
+    Works with OpenAI directly, LiteLLM proxies, Azure OpenAI, Groq, etc.
+    Requires OPENAI_API_KEY and the ``openai`` package (``pip install openai``).
+
+    Args:
+        model: Model name (e.g. ``gpt-4o-mini``, ``claude-haiku-4-5-20251001``).
+        base_url: Optional custom base URL. Defaults to the OpenAI API.
+                  Set to your LiteLLM proxy URL for custom deployments.
+    """
+    _model = model or "gpt-4o-mini"
+    _base_url = base_url or None  # None → openai SDK uses its default
+
+    async def summarize(prompt: str) -> str:
+        try:
+            from openai import AsyncOpenAI
+        except ImportError:
+            raise ImportError(
+                "LCM_SUMMARY_PROVIDER=openai requires the openai package. "
+                "Install with: pip install openai"
+            )
+        kwargs: dict = {}
+        if _base_url:
+            kwargs["base_url"] = _base_url
+        client = AsyncOpenAI(**kwargs)
+        resp = await client.chat.completions.create(
+            model=_model,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.choices[0].message.content or ""
+
+    return summarize
+
 
 def _make_anthropic_summarizer(model: str) -> SummarizeFn:
     """Summarizer that calls the Anthropic API directly.
@@ -153,12 +193,15 @@ def _get_summarize_fn() -> SummarizeFn:
     """Return the configured summarize function (first match wins):
     1. --summarize-command CLI flag
     2. LCM_SUMMARY_PROVIDER=anthropic
-    3. deterministic truncation fallback
+    3. LCM_SUMMARY_PROVIDER=openai  (also works for LiteLLM, Azure, Groq, etc.)
+    4. deterministic truncation fallback
     """
     if _summarize_command:
         return _make_command_summarizer(_summarize_command)
     if _config and _config.summary_provider == "anthropic":
         return _make_anthropic_summarizer(_config.summary_model)
+    if _config and _config.summary_provider == "openai":
+        return _make_openai_summarizer(_config.summary_model, _config.summary_base_url)
     return _make_truncation_summarizer()
 
 
@@ -172,6 +215,9 @@ def _get_expansion_fn() -> SummarizeFn:
     if _config and _config.summary_provider == "anthropic":
         model = _config.expansion_model or _config.summary_model
         return _make_anthropic_summarizer(model)
+    if _config and _config.summary_provider == "openai":
+        model = _config.expansion_model or _config.summary_model
+        return _make_openai_summarizer(model, _config.summary_base_url)
     return _make_truncation_summarizer()
 
 

@@ -48,6 +48,7 @@ class LCMConfig:
     summary_budget_ratio: float = 0.4
     summary_model: str = ""
     summary_provider: str = ""
+    summary_base_url: str = ""
     expansion_model: str = ""
     ignore_session_patterns: List[str] = field(default_factory=list)
     incremental_max_depth: int = 1
@@ -109,6 +110,7 @@ class LCMConfig:
         "summary_budget_ratio": ("LCM_SUMMARY_BUDGET_RATIO", float),
         "summary_model": ("LCM_SUMMARY_MODEL", str),
         "summary_provider": ("LCM_SUMMARY_PROVIDER", str),
+        "summary_base_url": ("LCM_SUMMARY_BASE_URL", str),
         "expansion_model": ("LCM_EXPANSION_MODEL", str),
         "ignore_session_patterns": ("LCM_IGNORE_SESSION_PATTERNS", None),
         "incremental_max_depth": ("LCM_INCREMENTAL_MAX_DEPTH", int),
