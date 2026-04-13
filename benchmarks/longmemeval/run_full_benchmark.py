@@ -29,23 +29,21 @@ if _env_path.exists():
                 import os as _os
                 _os.environ.setdefault(_k.strip(), _v.strip())
 
-import asyncio
-import json
-import os
-import sys
-import time
-import tempfile
-import shutil
-import traceback
-from pathlib import Path
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+import tempfile  # noqa: E402
+import shutil  # noqa: E402
+import traceback  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import List  # noqa: E402
 
 # Add parent to path for lossless-agent
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from lossless_agent.adapters.simple import SimpleAdapter
-from lossless_agent.config import LCMConfig
+from lossless_agent.adapters.simple import SimpleAdapter  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Config
@@ -145,7 +143,7 @@ async def run_lcm_question(question: dict, llm: LLMBackend, idx: int, total: int
     qid = question["question_id"]
     qtype = question["question_type"]
     qtxt = question["question"]
-    answer = question["answer"]
+    _answer = question["answer"]
     sessions = question["haystack_sessions"]
     session_ids = question["haystack_session_ids"]
     session_dates = question.get("haystack_dates", [])
@@ -408,7 +406,7 @@ def write_report(lcm_eval: dict, baseline_eval: dict, lcm_llm: LLMBackend, basel
     lines.append("# LongMemEval Benchmark Report — lossless-agent")
     lines.append(f"\nGenerated: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"Model: {MODEL} | Judge: {JUDGE_MODEL}")
-    lines.append(f"Dataset: longmemeval_s (500 questions, 6 types)")
+    lines.append("Dataset: longmemeval_s (500 questions, 6 types)")
     lines.append("")
 
     lines.append("## Overall Results")
@@ -434,8 +432,8 @@ def write_report(lcm_eval: dict, baseline_eval: dict, lcm_llm: LLMBackend, basel
 
     lines.append("## Cost & Performance")
     lines.append("")
-    lines.append(f"| Metric | LCM | Baseline |")
-    lines.append(f"|--------|-----|----------|")
+    lines.append("| Metric | LCM | Baseline |")
+    lines.append("|--------|-----|----------|")
     lines.append(f"| LLM Calls | {lcm_llm.total_calls:,} | {baseline_llm.total_calls:,} |")
     lines.append(f"| Input Tokens | {lcm_llm.total_input_tokens:,} | {baseline_llm.total_input_tokens:,} |")
     lines.append(f"| Output Tokens | {lcm_llm.total_output_tokens:,} | {baseline_llm.total_output_tokens:,} |")

@@ -30,25 +30,23 @@ if _env_path.exists():
                 import os as _os
                 _os.environ.setdefault(_k.strip(), _v.strip())
 
-import asyncio
-import json
-import os
-import sys
-import time
-import tempfile
-import shutil
-import traceback
-import numpy as np
-from pathlib import Path
-from typing import List, Optional, Tuple
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+import tempfile  # noqa: E402
+import shutil  # noqa: E402
+import traceback  # noqa: E402
+import numpy as np  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import List, Tuple  # noqa: E402
 
 # Add parent to path for lossless-agent
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from lossless_agent.config import LCMConfig
-from lossless_agent.store import Database, ConversationStore, MessageStore, SummaryStore
-from lossless_agent.engine import ContextAssembler
-from lossless_agent.tools import lcm_grep
+from lossless_agent.store import Database, ConversationStore, MessageStore  # noqa: E402
+from lossless_agent.tools import lcm_grep  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Config
@@ -435,7 +433,7 @@ Does the model response contain the correct answer? Be lenient — if the key fa
             "answer": ref["answer"],
         })
 
-        status = "Y" if is_correct else "N"
+        _status = "Y" if is_correct else "N"
         if total % 50 == 0:
             print(f"  Evaluated {total}/{len(predictions)}... ({correct}/{total} correct so far)")
 
@@ -467,7 +465,7 @@ def write_report(sem_eval: dict, sem_llm: LLMBackend, prev_eval: dict = None, ti
     lines.append(f"\nGenerated: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"Model: {MODEL} | Judge: {JUDGE_MODEL}")
     lines.append(f"Embeddings: {EMBEDDING_MODEL_NAME} (dim={EMBEDDING_DIM}, local)")
-    lines.append(f"Dataset: longmemeval_s (500 questions, 6 types)")
+    lines.append("Dataset: longmemeval_s (500 questions, 6 types)")
     lines.append("")
 
     lines.append("## Overall Results")
@@ -524,8 +522,8 @@ def write_report(sem_eval: dict, sem_llm: LLMBackend, prev_eval: dict = None, ti
 
     lines.append("## Cost & Performance")
     lines.append("")
-    lines.append(f"| Metric | Value |")
-    lines.append(f"|--------|-------|")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
     lines.append(f"| LLM Calls | {sem_llm.total_calls:,} |")
     lines.append(f"| Input Tokens | {sem_llm.total_input_tokens:,} |")
     lines.append(f"| Output Tokens | {sem_llm.total_output_tokens:,} |")
