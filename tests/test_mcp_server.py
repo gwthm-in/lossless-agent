@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sys
 import types as stdlib_types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -588,3 +588,96 @@ class TestTruncationSummarizer:
         text = "a" * 4800  # exactly at limit
         result = await summarize(text)
         assert result == text
+
+
+def _make_fake_openai(mock_client):
+    """Build a fake openai module with AsyncOpenAI returning mock_client."""
+    from unittest.mock import MagicMock
+    fake = MagicMock()
+    fake.AsyncOpenAI = MagicMock(return_value=mock_client)
+    return fake
+
+
+class TestOpenAISummarizer:
+    """Test _make_openai_summarizer with a mocked openai module."""
+
+    @pytest.mark.asyncio
+    async def test_returns_model_response(self):
+        import sys
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = "summarized text"
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+
+        with patch.dict(sys.modules, {"openai": _make_fake_openai(mock_client)}):
+            summarize = mcp_mod._make_openai_summarizer("gpt-4o-mini")
+            result = await summarize("some long prompt")
+
+        assert result == "summarized text"
+        mock_client.chat.completions.create.assert_awaited_once()
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["model"] == "gpt-4o-mini"
+        assert call_kwargs["messages"][0]["content"] == "some long prompt"
+
+    @pytest.mark.asyncio
+    async def test_custom_base_url_passed_to_client(self):
+        import sys
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=MagicMock(**{"choices": [MagicMock(**{"message.content": "ok"})]})
+        )
+        fake_openai = _make_fake_openai(mock_client)
+
+        with patch.dict(sys.modules, {"openai": fake_openai}):
+            mcp_mod._make_openai_summarizer("gpt-4o-mini", "https://litellm.example.com/v1")
+
+        _, init_kwargs = fake_openai.AsyncOpenAI.call_args
+        assert init_kwargs.get("base_url") == "https://litellm.example.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_no_base_url_omits_kwarg(self):
+        import sys
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=MagicMock(**{"choices": [MagicMock(**{"message.content": "ok"})]})
+        )
+        fake_openai = _make_fake_openai(mock_client)
+
+        with patch.dict(sys.modules, {"openai": fake_openai}):
+            mcp_mod._make_openai_summarizer("gpt-4o-mini", "")
+
+        _, init_kwargs = fake_openai.AsyncOpenAI.call_args
+        assert "base_url" not in init_kwargs
+
+    @pytest.mark.asyncio
+    async def test_client_created_once_not_per_call(self):
+        """Client must be created in the factory closure, not inside summarize()."""
+        import sys
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_client = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.choices[0].message.content = "ok"
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
+        fake_openai = _make_fake_openai(mock_client)
+
+        with patch.dict(sys.modules, {"openai": fake_openai}):
+            summarize = mcp_mod._make_openai_summarizer("gpt-4o-mini")
+            await summarize("prompt 1")
+            await summarize("prompt 2")
+            await summarize("prompt 3")
+
+        # AsyncOpenAI constructor called exactly once despite 3 summarize calls
+        assert fake_openai.AsyncOpenAI.call_count == 1
+
+    def test_missing_openai_package_raises_import_error(self):
+        import sys
+        with patch.dict(sys.modules, {"openai": None}):
+            with pytest.raises(ImportError, match="pip install openai"):
+                mcp_mod._make_openai_summarizer("gpt-4o-mini")
