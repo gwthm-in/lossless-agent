@@ -82,7 +82,10 @@ jobs:
           pip install mkdocs mkdocs-material
 
       - name: Build docs
-        run: mkdocs build --config-file docs/mkdocs.yml --site-dir ../site
+        run: |
+          mkdocs build --config-file docs/mkdocs.yml --site-dir ../site
+          # Copy extra static assets that mkdocs doesn't auto-include
+          cp docs/visualization.html ../site/visualization.html
 
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v3
