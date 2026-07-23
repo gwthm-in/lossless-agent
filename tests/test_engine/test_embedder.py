@@ -24,6 +24,17 @@ class TestMakeEmbedder:
         config = LCMConfig(cross_session_enabled=True, embedding_base_url="")
         assert make_embedder(config) is None
 
+    def test_returns_local_embedder_when_use_local_and_no_base_url(self):
+        # cross_session can run fully local via fastembed — no HTTP endpoint needed.
+        config = LCMConfig(
+            cross_session_enabled=True,
+            cross_session_use_local=True,
+            embedding_base_url="",
+        )
+        fn = make_embedder(config)
+        assert fn is not None
+        assert callable(fn)
+
     def test_returns_callable_when_configured(self):
         config = LCMConfig(
             cross_session_enabled=True,

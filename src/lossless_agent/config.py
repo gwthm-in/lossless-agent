@@ -81,6 +81,10 @@ class LCMConfig:
     cross_session_top_k: int = 5
     cross_session_token_budget: int = 2000
     cross_session_min_score: float = 0.70  # discard hits below this cosine similarity
+    # Use local fastembed for cross-session embeddings instead of an HTTP endpoint.
+    # No API key / base URL needed. Set embedding_dim to match the local model
+    # (e.g. 1024 for mixedbread-ai/mxbai-embed-large-v1, the raw_vector_model default).
+    cross_session_use_local: bool = False
 
     # Raw vector retrieval (embeds messages at ingestion time, no LLM calls)
     raw_vector_enabled: bool = False  # opt-in; requires pgvector + database_dsn
@@ -139,6 +143,7 @@ class LCMConfig:
         "cross_session_top_k": ("LCM_CROSS_SESSION_TOP_K", int),
         "cross_session_token_budget": ("LCM_CROSS_SESSION_TOKEN_BUDGET", int),
         "cross_session_min_score": ("LCM_CROSS_SESSION_MIN_SCORE", float),
+        "cross_session_use_local": ("LCM_CROSS_SESSION_USE_LOCAL", _parse_bool),
         "raw_vector_enabled": ("LCM_RAW_VECTOR_ENABLED", _parse_bool),
         "raw_vector_model": ("LCM_RAW_VECTOR_MODEL", str),
         "raw_vector_dim": ("LCM_RAW_VECTOR_DIM", int),

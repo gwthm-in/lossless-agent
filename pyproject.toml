@@ -41,6 +41,10 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py39"
 
+[tool.ruff.lint]
+# Pin the ruleset so unpinned ruff versions stay consistent (avoids CI drift).
+select = ["E4", "E7", "E9", "F"]
+
 [tool.mypy]
 python_version = "3.9"
 warn_return_any = true
