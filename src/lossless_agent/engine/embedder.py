@@ -60,10 +60,14 @@ def make_embedder(config: "LCMConfig") -> Optional[EmbedFn]:
     """
     if not config.cross_session_enabled:
         return None
+    if config.cross_session_use_local:
+        # Local fastembed — no HTTP endpoint or API key required. Reuses the
+        # raw_vector model; ensure embedding_dim matches that model's dimension.
+        return make_local_embedder(config.raw_vector_model)
     if not config.embedding_base_url:
         logger.warning(
-            "cross_session_enabled=True but embedding_base_url is not set — "
-            "cross-session retrieval disabled"
+            "cross_session_enabled=True but neither embedding_base_url nor "
+            "cross_session_use_local is set — cross-session retrieval disabled"
         )
         return None
 
