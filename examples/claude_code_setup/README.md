@@ -48,9 +48,48 @@ the MCP server.
 - `lcm_get_context` — Assemble optimized context within token budget
 - `lcm_session_end` — Signal session end for final compaction
 
-## Full Lifecycle Setup
+## Automatic capture (hooks) — zero-code, recommended
 
-For automatic context management, add instructions to your `CLAUDE.md`:
+Claude Code has two extension points: **MCP tools** (recall, above) and **hooks** (events).
+The `lossless-agent-capture` console script is the hook half — register it and lossless
+captures **every turn automatically** into a per-project store and builds the summary DAG.
+No `CLAUDE.md` instructions, no reliance on the model remembering to call `lcm_ingest`.
+
+Add to `~/.claude/settings.json` (or a project `.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "Stop":       [{ "hooks": [{ "type": "command", "command": "lossless-agent-capture" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "lossless-agent-capture --final" }] }]
+  }
+}
+```
+
+- **Stop** (after each assistant turn) → ingest new messages + incremental compaction.
+- **SessionEnd** `--final` → final leaf/condensed compaction sweep.
+
+Everything is configured via **environment variables** — no code:
+
+| Env var | Purpose |
+|---|---|
+| `LCM_DATABASE_DSN` | Explicit store DSN. If unset, one is derived **per project** from `CLAUDE_PROJECT_DIR` as `lcm_<basename>_<hash>` (auto-created if missing). |
+| `LCM_SUMMARY_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` | **Recommended** summarizer — a direct API call (fast, no CLI cold-start). Also `openai` (OpenAI/LiteLLM/Azure/Groq). Unset → deterministic truncation fallback. |
+| `LCM_SUMMARY_MODEL` | e.g. `claude-haiku-4-5-20251001`. |
+| `LCM_SUMMARIZE_COMMAND` | Alternative: an external `stdin → stdout` summarizer command. |
+| `LCM_LEAF_CHUNK_TOKENS`, `LCM_SUMMARY_TIMEOUT_MS`, … | Compaction tuning (honoured on the capture + ingest paths). |
+
+Point the MCP server (recall) at the **same** store so reads and writes share it — either set
+`LCM_DATABASE_DSN` for both, or give `lossless-agent-mcp` the matching `--db-dsn`.
+
+This is the seamless path: `pip install lossless-agent` → register the hook → set env. The
+capture runs through the generic adapter's own `on_turn_end` / `on_session_end` lifecycle, so
+compaction, the semantic layer, and configuration are all the library's.
+
+## Full Lifecycle Setup (prompt-driven alternative)
+
+If you prefer the model to drive capture via tool calls instead of hooks, add instructions to
+your `CLAUDE.md`:
 
 ```bash
 python -m examples.claude_code_middleware my-project > CLAUDE.md
