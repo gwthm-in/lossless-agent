@@ -345,8 +345,10 @@ class CompactionEngine:
         # Take oldest chunk up to token limit
         chunk: List[Message] = []
         total_tokens = 0
+        broke_on_budget = False
         for m in uncompacted:
             if total_tokens + m.token_count > self.cfg.leaf_chunk_tokens and chunk:
+                broke_on_budget = True
                 # We are blocked by *m*.  A message whose own token_count exceeds
                 # the whole chunk budget (an oversized message, at ANY position)
                 # can never batch with peers, so it would otherwise indefinitely
@@ -367,14 +369,21 @@ class CompactionEngine:
             chunk.append(m)
             total_tokens += m.token_count
 
-        # Waive the ``leaf_min_fanout`` floor when the chunk contains an
-        # oversized message (at the head, or absorbed above): progress matters
-        # more than fan-out in this pathological case since the giant cannot be
-        # batched with anything else anyway.
+        # Waive the ``leaf_min_fanout`` floor when the chunk is token-heavy and so
+        # cannot grow to reach the floor: either it holds an oversized message, or
+        # the loop stopped because the budget filled (``broke_on_budget``). A
+        # budget-blocked chunk of a few large messages would otherwise stall the
+        # pass forever (nothing behind the blocker can ever compact). ``min_fanout``
+        # only needs to guard the trailing-few-*small*-messages case, i.e. the loop
+        # ran out of messages without hitting the budget.
         chunk_has_oversized = any(
             m.token_count > self.cfg.leaf_chunk_tokens for m in chunk
         )
-        if not chunk_has_oversized and len(chunk) < self.cfg.leaf_min_fanout:
+        if (
+            not chunk_has_oversized
+            and not broke_on_budget
+            and len(chunk) < self.cfg.leaf_min_fanout
+        ):
             return []
 
         return chunk

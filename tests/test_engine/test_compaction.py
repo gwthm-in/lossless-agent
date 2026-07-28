@@ -489,6 +489,21 @@ class TestOversizedMessage:
         await self.engine.compact_until_under(self.conv.id, limit)
         assert self.engine.needs_compaction(self.conv.id, limit) is False
 
+    def test_select_chunk_budget_blocked_non_oversized_makes_progress(self):
+        # Regression (G9 sibling): a chunk blocked by a large-but-NOT-oversized
+        # message before reaching leaf_min_fanout must still compact — waiving the
+        # fanout floor on a budget break — instead of stalling the pass forever.
+        # leaf_chunk_tokens=500; [200, 200, 300] each <= 500 (not oversized) but the
+        # 300 overflows the 400 already accumulated, breaking below min_fanout=4.
+        for tok in (200, 200, 300):
+            self.msg_store.append(self.conv.id, "user", "word " * tok, token_count=tok)
+        for _ in range(2):  # fresh_tail_count=2 keeps these out of the eligible set
+            self.msg_store.append(self.conv.id, "assistant", "tail", token_count=10)
+        chunk = self.engine.select_chunk(self.conv.id)
+        assert chunk != []                       # progress, not a permanent []
+        assert len(chunk) == 2                    # [200, 200]; the 300 overflowed the budget
+        assert all(m.token_count <= self.engine.cfg.leaf_chunk_tokens for m in chunk)
+
 
 # ===================================================================
 # SummaryStore new methods
