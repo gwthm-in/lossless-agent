@@ -12,6 +12,8 @@ def test_project_db_name_is_deterministic_and_slugged():
     assert len(a.rsplit("_", 1)[-1]) == 8     # 8-hex path suffix
     # different paths with the same basename must not collide
     assert cc.project_db_name("/a/My-Project") != cc.project_db_name("/b/My-Project")
+    # must stay within Postgres's 63-byte identifier limit even for very long basenames
+    assert len(cc.project_db_name("/x/" + "a" * 200)) <= 63
 
 
 def test_build_config_default_is_shared_sqlite(monkeypatch):

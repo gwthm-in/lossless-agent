@@ -62,6 +62,7 @@ def project_db_name(root: str) -> str:
     """Deterministic per-project store name: ``lcm_<basename>_<8 hex of sha256(path)>``.
     The basename stays human-readable; the path hash prevents same-name collisions."""
     base = re.sub(r"[^a-z0-9]", "_", os.path.basename(root.rstrip("/")).lower()) or "root"
+    base = base[:48]   # keep "lcm_" + slug + "_" + 8-hex under Postgres's 63-byte identifier limit
     h = hashlib.sha256(root.encode("utf-8")).hexdigest()[:8]
     return f"lcm_{base}_{h}"
 
