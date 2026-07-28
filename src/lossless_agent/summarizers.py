@@ -67,6 +67,9 @@ def make_anthropic_summarizer(model: str) -> SummarizeFn:
     _oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if _oauth:
         beta = os.environ.get("LCM_ANTHROPIC_OAUTH_BETA", "oauth-2025-04-20")
+        # Pass auth_token but NOT api_key: given a bearer token, the SDK does not fall back to the
+        # ANTHROPIC_API_KEY env var, so this sends `Authorization: Bearer` (never x-api-key) even
+        # when ANTHROPIC_API_KEY is also set. (Passing api_key="" would wrongly emit BOTH headers.)
         client = _anthropic.AsyncAnthropic(
             auth_token=_oauth,
             default_headers={"anthropic-beta": beta},
