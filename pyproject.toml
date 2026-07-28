@@ -12,8 +12,9 @@ dependencies = [
     "tiktoken",
     # MCP server (lossless-agent-mcp entry point). mcp requires Python 3.10+,
     # so it's skipped on 3.9 — where the server can't run anyway and the test
-    # suite mocks the module.
-    "mcp>=1.0; python_version >= '3.10'",
+    # suite mocks the module. Pinned <2: mcp 2.0 reworked the Server API
+    # (dropped `@server.list_tools()`); migrate deliberately in its own PR.
+    "mcp>=1.0,<2; python_version >= '3.10'",
 ]
 
 [project.optional-dependencies]
