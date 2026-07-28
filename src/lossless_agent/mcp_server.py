@@ -36,15 +36,7 @@ from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
 from lossless_agent.engine.compaction import CompactionEngine, SummarizeFn
-from lossless_agent.summarizers import (
-    build_summarize_fn,
-    build_expansion_fn,
-    # Re-exported under their historical private names for backward compatibility.
-    make_truncation_summarizer as _make_truncation_summarizer,
-    make_command_summarizer as _make_command_summarizer,
-    make_openai_summarizer as _make_openai_summarizer,
-    make_anthropic_summarizer as _make_anthropic_summarizer,
-)
+from lossless_agent.summarizers import build_summarize_fn, build_expansion_fn
 from lossless_agent.engine.assembler import ContextAssembler, AssemblerConfig
 from lossless_agent.tools.recall import (
     lcm_grep,

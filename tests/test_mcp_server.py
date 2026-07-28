@@ -67,6 +67,7 @@ except ImportError:
 
 # Now we can import the mcp_server module
 import lossless_agent.mcp_server as mcp_mod  # noqa: E402
+import lossless_agent.summarizers as summ_mod  # noqa: E402
 
 from lossless_agent.store.database import Database  # noqa: E402
 from lossless_agent.store.conversation_store import ConversationStore  # noqa: E402
@@ -562,13 +563,13 @@ class TestTruncationSummarizer:
 
     @pytest.mark.asyncio
     async def test_short_text_passes_through(self):
-        summarize = mcp_mod._make_truncation_summarizer()
+        summarize = summ_mod.make_truncation_summarizer()
         result = await summarize("Short text")
         assert result == "Short text"
 
     @pytest.mark.asyncio
     async def test_long_text_truncated(self):
-        summarize = mcp_mod._make_truncation_summarizer()
+        summarize = summ_mod.make_truncation_summarizer()
         long_text = "x" * 10000
         result = await summarize(long_text)
         assert len(result) < len(long_text)
@@ -576,7 +577,7 @@ class TestTruncationSummarizer:
 
     @pytest.mark.asyncio
     async def test_truncation_at_char_limit(self):
-        summarize = mcp_mod._make_truncation_summarizer()
+        summarize = summ_mod.make_truncation_summarizer()
         # Default target_tokens = 1200, char_limit = 1200 * 4 = 4800
         text = "a" * 4801
         result = await summarize(text)
@@ -584,7 +585,7 @@ class TestTruncationSummarizer:
 
     @pytest.mark.asyncio
     async def test_exact_limit_passes_through(self):
-        summarize = mcp_mod._make_truncation_summarizer()
+        summarize = summ_mod.make_truncation_summarizer()
         text = "a" * 4800  # exactly at limit
         result = await summarize(text)
         assert result == text
@@ -612,7 +613,7 @@ class TestOpenAISummarizer:
         mock_client.chat.completions.create = AsyncMock(return_value=mock_resp)
 
         with patch.dict(sys.modules, {"openai": _make_fake_openai(mock_client)}):
-            summarize = mcp_mod._make_openai_summarizer("gpt-4o-mini")
+            summarize = summ_mod.make_openai_summarizer("gpt-4o-mini")
             result = await summarize("some long prompt")
 
         assert result == "summarized text"
@@ -633,7 +634,7 @@ class TestOpenAISummarizer:
         fake_openai = _make_fake_openai(mock_client)
 
         with patch.dict(sys.modules, {"openai": fake_openai}):
-            mcp_mod._make_openai_summarizer("gpt-4o-mini", "https://litellm.example.com/v1")
+            summ_mod.make_openai_summarizer("gpt-4o-mini", "https://litellm.example.com/v1")
 
         _, init_kwargs = fake_openai.AsyncOpenAI.call_args
         assert init_kwargs.get("base_url") == "https://litellm.example.com/v1"
@@ -650,7 +651,7 @@ class TestOpenAISummarizer:
         fake_openai = _make_fake_openai(mock_client)
 
         with patch.dict(sys.modules, {"openai": fake_openai}):
-            mcp_mod._make_openai_summarizer("gpt-4o-mini", "")
+            summ_mod.make_openai_summarizer("gpt-4o-mini", "")
 
         _, init_kwargs = fake_openai.AsyncOpenAI.call_args
         assert "base_url" not in init_kwargs
@@ -668,7 +669,7 @@ class TestOpenAISummarizer:
         fake_openai = _make_fake_openai(mock_client)
 
         with patch.dict(sys.modules, {"openai": fake_openai}):
-            summarize = mcp_mod._make_openai_summarizer("gpt-4o-mini")
+            summarize = summ_mod.make_openai_summarizer("gpt-4o-mini")
             await summarize("prompt 1")
             await summarize("prompt 2")
             await summarize("prompt 3")
@@ -680,4 +681,4 @@ class TestOpenAISummarizer:
         import sys
         with patch.dict(sys.modules, {"openai": None}):
             with pytest.raises(ImportError, match="pip install openai"):
-                mcp_mod._make_openai_summarizer("gpt-4o-mini")
+                summ_mod.make_openai_summarizer("gpt-4o-mini")

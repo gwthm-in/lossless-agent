@@ -1,6 +1,5 @@
 """Unit tests for the Claude Code capture integration (no database required)."""
 import json
-import os
 
 from lossless_agent.integrations import claude_code as cc
 
