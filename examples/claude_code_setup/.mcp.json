@@ -1,11 +1,7 @@
 {
   "mcpServers": {
     "lossless-agent": {
-      "command": "lossless-agent-mcp",
-      "args": [
-        "--db-path",
-        "./data/lcm.db"
-      ]
+      "command": "lossless-agent-mcp"
     }
   }
 }

@@ -36,6 +36,7 @@ from lossless_agent.store.conversation_store import ConversationStore
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
 from lossless_agent.engine.compaction import CompactionEngine, SummarizeFn
+from lossless_agent.summarizers import build_summarize_fn, build_expansion_fn
 from lossless_agent.engine.assembler import ContextAssembler, AssemblerConfig
 from lossless_agent.tools.recall import (
     lcm_grep,
@@ -81,143 +82,14 @@ def _serialize(obj: Any) -> Any:
 # Summarizer factory
 # ------------------------------------------------------------------
 
-def _make_openai_summarizer(model: str, base_url: str = "") -> SummarizeFn:
-    """Summarizer that calls any OpenAI-compatible endpoint.
-
-    Works with OpenAI directly, LiteLLM proxies, Azure OpenAI, Groq, etc.
-    Requires OPENAI_API_KEY and the ``openai`` package (``pip install openai``).
-
-    Args:
-        model: Model name (e.g. ``gpt-4o-mini``, ``claude-haiku-4-5-20251001``).
-        base_url: Optional custom base URL. Defaults to the OpenAI API.
-                  Set to your LiteLLM proxy URL for custom deployments.
-    """
-    try:
-        from openai import AsyncOpenAI
-    except ImportError:
-        raise ImportError(
-            "LCM_SUMMARY_PROVIDER=openai requires the openai package. "
-            "Install with: pip install openai"
-        )
-    _model = model or "gpt-4o-mini"
-    kwargs: dict = {}
-    if base_url:
-        kwargs["base_url"] = base_url
-    client = AsyncOpenAI(**kwargs)
-
-    async def summarize(prompt: str) -> str:
-        resp = await client.chat.completions.create(
-            model=_model,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.choices[0].message.content or ""
-
-    return summarize
-
-
-def _make_anthropic_summarizer(model: str) -> SummarizeFn:
-    """Summarizer that calls the Anthropic API directly.
-
-    Requires ANTHROPIC_API_KEY in the environment and the ``anthropic``
-    package (``pip install anthropic``).
-    """
-    try:
-        import anthropic as _anthropic
-    except ImportError:
-        raise ImportError(
-            "LCM_SUMMARY_PROVIDER=anthropic requires the anthropic package. "
-            "Install with: pip install anthropic"
-        )
-    _model = model or "claude-haiku-4-5-20251001"
-    client = _anthropic.AsyncAnthropic()
-
-    async def summarize(prompt: str) -> str:
-        message = await client.messages.create(
-            model=_model,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return message.content[0].text  # type: ignore[union-attr]
-
-    return summarize
-
-
-def _make_truncation_summarizer() -> SummarizeFn:
-    """Built-in deterministic summarizer: truncates to target length.
-
-    This is a fallback — it preserves the DAG structure so original
-    messages are still recoverable via lcm_expand, even though the
-    summary text itself is truncated rather than intelligently compressed.
-
-    For production use, pass --summarize-command to use an external
-    LLM-backed summarizer.
-    """
-    async def summarize(prompt: str) -> str:
-        # Extract target token count from the prompt if present,
-        # otherwise use a reasonable default
-        target_tokens = 1200  # default leaf target
-        # The prompt from build_leaf_prompt / build_condensed_prompt
-        # contains the text to summarize. We just truncate it.
-        char_limit = target_tokens * 4
-        if len(prompt) <= char_limit:
-            return prompt
-        return prompt[:char_limit] + "\n[Summary truncated — configure --summarize-command for LLM-quality summaries]"
-    return summarize
-
-
-def _make_command_summarizer(command: str) -> SummarizeFn:
-    """Summarizer that pipes the prompt to an external command via stdin.
-
-    The command should read the prompt from stdin and write the summary
-    to stdout. Example: --summarize-command 'python my_summarizer.py'
-    """
-    async def summarize(prompt: str) -> str:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate(prompt.encode("utf-8"))
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"Summarize command failed (exit {proc.returncode}): {stderr.decode()}"
-            )
-        return stdout.decode("utf-8").strip()
-    return summarize
-
-
 def _get_summarize_fn() -> SummarizeFn:
-    """Return the configured summarize function (first match wins):
-    1. --summarize-command CLI flag
-    2. LCM_SUMMARY_PROVIDER=anthropic
-    3. LCM_SUMMARY_PROVIDER=openai  (also works for LiteLLM, Azure, Groq, etc.)
-    4. deterministic truncation fallback
-    """
-    if _summarize_command:
-        return _make_command_summarizer(_summarize_command)
-    if _config and _config.summary_provider == "anthropic":
-        return _make_anthropic_summarizer(_config.summary_model)
-    if _config and _config.summary_provider == "openai":
-        return _make_openai_summarizer(_config.summary_model, _config.summary_base_url)
-    return _make_truncation_summarizer()
+    """Configured summarizer: command > anthropic > openai > truncation."""
+    return build_summarize_fn(_config, _summarize_command)
 
 
 def _get_expansion_fn() -> SummarizeFn:
-    """Return the summarize function to use for lcm_expand_query synthesis.
-
-    Uses LCM_EXPANSION_MODEL if set, falls back to the summary model/provider.
-    """
-    if _summarize_command:
-        return _make_command_summarizer(_summarize_command)
-    if _config and _config.summary_provider == "anthropic":
-        model = _config.expansion_model or _config.summary_model
-        return _make_anthropic_summarizer(model)
-    if _config and _config.summary_provider == "openai":
-        model = _config.expansion_model or _config.summary_model
-        return _make_openai_summarizer(model, _config.summary_base_url)
-    return _make_truncation_summarizer()
+    """Summarizer for lcm_expand_query synthesis (honours LCM_EXPANSION_MODEL)."""
+    return build_expansion_fn(_config, _summarize_command)
 
 
 # ------------------------------------------------------------------
@@ -677,7 +549,10 @@ async def _handle_ingest(arguments: dict) -> list[types.TextContent]:
     # Run incremental compaction if needed
     sum_store = SummaryStore(_db)
     summarize_fn = _get_summarize_fn()
-    engine = CompactionEngine(msg_store, sum_store, summarize_fn)
+    engine = CompactionEngine(
+        msg_store, sum_store, summarize_fn,
+        _config.compaction if _config else None,
+    )
 
     compacted_count = 0
     # Use a reasonable context limit for auto-compaction check
@@ -708,7 +583,10 @@ async def _handle_compact(arguments: dict) -> list[types.TextContent]:
 
     conv = conv_store.get_or_create(session_key)
     summarize_fn = _get_summarize_fn()
-    engine = CompactionEngine(msg_store, sum_store, summarize_fn)
+    engine = CompactionEngine(
+        msg_store, sum_store, summarize_fn,
+        _config.compaction if _config else None,
+    )
 
     created = await engine.compact_full_sweep(conv.id)
 
@@ -764,7 +642,10 @@ async def _handle_session_end(arguments: dict) -> list[types.TextContent]:
 
     conv = conv_store.get_or_create(session_key)
     summarize_fn = _get_summarize_fn()
-    engine = CompactionEngine(msg_store, sum_store, summarize_fn)
+    engine = CompactionEngine(
+        msg_store, sum_store, summarize_fn,
+        _config.compaction if _config else None,
+    )
 
     created = await engine.compact_full_sweep(conv.id)
 
@@ -928,8 +809,10 @@ def cli() -> None:
     parser = argparse.ArgumentParser(description="LCM MCP Server (stdio transport)")
     parser.add_argument(
         "--db-path",
-        default="~/.lossless-agent/lcm.db",
-        help="Path to the lossless-agent SQLite database (ignored when --db-dsn is set)",
+        default=None,
+        help="Path to the SQLite database (ignored when --db-dsn is set). When omitted, falls "
+             "back to LCM_DATABASE_PATH / LCM_DATABASE_DSN (default ~/.lossless-agent/lcm.db) so "
+             "the server can share one store with the capture hook.",
     )
     parser.add_argument(
         "--db-dsn",

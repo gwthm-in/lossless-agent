@@ -23,6 +23,12 @@ local-embeddings = [
 postgres = [
     "psycopg2-binary>=2.9",
 ]
+anthropic = [
+    "anthropic>=0.40",
+]
+openai = [
+    "openai>=1.0",
+]
 dev = [
     "pytest",
     "pytest-cov",
@@ -37,6 +43,7 @@ dev = [
 
 [project.scripts]
 lossless-agent-mcp = "lossless_agent.mcp_server:cli"
+lossless-agent-capture = "lossless_agent.integrations.claude_code:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
