@@ -10,7 +10,7 @@ from __future__ import annotations
 # is self-contained, so this is optional.
 SYSTEM_PROMPT = (
     "You are a context-compaction summarization engine. "
-    "Follow the instructions exactly and return plain-text summary content only."
+    "Follow user instructions exactly and return plain text summary content only."
 )
 
 _LEAF_INSTRUCTION = (

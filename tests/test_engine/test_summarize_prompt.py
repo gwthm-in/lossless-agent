@@ -8,24 +8,22 @@ from lossless_agent.engine.summarize_prompt import (
 )
 
 
-# ------------------------------------------------------------------
-# SYSTEM_PROMPT
-# ------------------------------------------------------------------
-
 class TestSystemPrompt:
     def test_system_prompt_content(self):
         assert "context-compaction summarization engine" in SYSTEM_PROMPT
         assert "plain text summary content only" in SYSTEM_PROMPT
 
 
-# ------------------------------------------------------------------
-# build_leaf_prompt
-# ------------------------------------------------------------------
-
 class TestBuildLeafPrompt:
+    def test_instructs_summary_not_continuation(self):
+        # The core guarantee: the prompt must tell the model to SUMMARIZE, never continue the chat.
+        result = build_leaf_prompt("msgs", 1200).lower()
+        assert "summary" in result
+        assert "not a reply" in result
+        assert "do not continue" in result
+
     def test_includes_target_tokens(self):
-        result = build_leaf_prompt("some messages", 1200)
-        assert "Target token count: 1200" in result
+        assert "at most 1200 tokens" in build_leaf_prompt("some messages", 1200)
 
     def test_includes_messages(self):
         result = build_leaf_prompt("hello world msgs", 1200)
@@ -34,16 +32,14 @@ class TestBuildLeafPrompt:
         assert "</messages>" in result
 
     def test_no_custom_instructions(self):
-        result = build_leaf_prompt("msgs", 1200)
-        assert "Operator instructions: (none)" in result
+        assert "operator instructions" not in build_leaf_prompt("msgs", 1200).lower()
 
     def test_with_custom_instructions(self):
         result = build_leaf_prompt("msgs", 1200, custom_instructions="Be concise")
-        assert "Operator instructions: Be concise" in result
+        assert "operator instructions: Be concise".lower() in result.lower()
 
     def test_no_previous_summary(self):
-        result = build_leaf_prompt("msgs", 1200)
-        assert "Previous context: (none)" in result
+        assert "<previous_context>" not in build_leaf_prompt("msgs", 1200)
 
     def test_with_previous_summary(self):
         result = build_leaf_prompt("msgs", 1200, previous_summary="prior context here")
@@ -52,12 +48,10 @@ class TestBuildLeafPrompt:
         assert "</previous_context>" in result
 
     def test_not_aggressive_by_default(self):
-        result = build_leaf_prompt("msgs", 1200)
-        assert "AGGRESSIVE" not in result
+        assert "compress harder" not in build_leaf_prompt("msgs", 1200).lower()
 
     def test_aggressive_mode(self):
-        result = build_leaf_prompt("msgs", 1200, aggressive=True)
-        assert "AGGRESSIVE: Compress much harder." in result
+        assert "compress harder" in build_leaf_prompt("msgs", 1200, aggressive=True).lower()
 
     def test_all_options(self):
         result = build_leaf_prompt(
@@ -66,21 +60,21 @@ class TestBuildLeafPrompt:
             previous_summary="earlier summary",
             aggressive=True,
         )
-        assert "Target token count: 2400" in result
+        assert "at most 2400 tokens" in result
         assert "Focus on code changes" in result
         assert "<previous_context>" in result
         assert "earlier summary" in result
-        assert "AGGRESSIVE" in result
+        assert "compress harder" in result.lower()
 
-
-# ------------------------------------------------------------------
-# build_condensed_prompt
-# ------------------------------------------------------------------
 
 class TestBuildCondensedPrompt:
+    def test_instructs_summary_not_continuation(self):
+        result = build_condensed_prompt("summaries", 2000, depth=1).lower()
+        assert "summary" in result
+        assert "not a reply" in result
+
     def test_includes_target_tokens(self):
-        result = build_condensed_prompt("summaries", 2000, depth=1)
-        assert "Target token count: 2000" in result
+        assert "at most 2000 tokens" in build_condensed_prompt("summaries", 2000, depth=1)
 
     def test_includes_summaries(self):
         result = build_condensed_prompt("summary content", 2000, depth=1)
@@ -89,33 +83,26 @@ class TestBuildCondensedPrompt:
         assert "</summaries>" in result
 
     def test_depth_1_guidance(self):
-        result = build_condensed_prompt("s", 2000, depth=1)
-        assert "focus on what is new, changed, or resolved" in result
+        assert "done, decided, changed, or resolved" in build_condensed_prompt("s", 2000, depth=1)
 
     def test_depth_2_guidance(self):
-        result = build_condensed_prompt("s", 2000, depth=2)
-        assert "preserve key decisions and outcomes" in result
+        assert "key decisions and outcomes" in build_condensed_prompt("s", 2000, depth=2)
 
     def test_depth_3_guidance(self):
-        result = build_condensed_prompt("s", 2000, depth=3)
-        assert "retain only the most critical facts" in result
+        assert "most critical durable facts" in build_condensed_prompt("s", 2000, depth=3)
 
     def test_depth_5_uses_depth3_guidance(self):
-        result = build_condensed_prompt("s", 2000, depth=5)
-        assert "retain only the most critical facts" in result
+        assert "most critical durable facts" in build_condensed_prompt("s", 2000, depth=5)
 
     def test_no_custom_instructions(self):
-        result = build_condensed_prompt("s", 2000, depth=1)
-        assert "Operator instructions: (none)" in result
+        assert "operator instructions" not in build_condensed_prompt("s", 2000, depth=1).lower()
 
     def test_with_custom_instructions(self):
         result = build_condensed_prompt("s", 2000, depth=1, custom_instructions="Keep names")
-        assert "Operator instructions: Keep names" in result
+        assert "Keep names" in result
 
     def test_not_aggressive_by_default(self):
-        result = build_condensed_prompt("s", 2000, depth=1)
-        assert "AGGRESSIVE" not in result
+        assert "compress harder" not in build_condensed_prompt("s", 2000, depth=1).lower()
 
     def test_aggressive_mode(self):
-        result = build_condensed_prompt("s", 2000, depth=1, aggressive=True)
-        assert "AGGRESSIVE: Compress much harder." in result
+        assert "compress harder" in build_condensed_prompt("s", 2000, depth=1, aggressive=True).lower()

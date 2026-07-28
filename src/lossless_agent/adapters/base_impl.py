@@ -25,7 +25,12 @@ from lossless_agent.engine import (
     SessionPatternMatcher,
     StartupBanner,
 )
-from lossless_agent.engine.embedder import EmbedFn, make_embedder
+from lossless_agent.engine.embedder import (
+    BatchEmbedFn,
+    EmbedFn,
+    make_embedder,
+    make_raw_vector_batch_embedder,
+)
 from lossless_agent.tools import lcm_grep, lcm_describe, lcm_expand
 
 logger = logging.getLogger(__name__)
@@ -83,6 +88,31 @@ class BaseAdapter(AgentAdapter):
             except Exception:
                 logger.warning("Failed to initialise VectorStore — cross-session disabled", exc_info=True)
                 self._embed_fn = None
+
+        # --- Raw-vector retrieval (optional, requires fastembed + database_dsn) ---
+        # Distinct from the cross-session embedder above: this is a local
+        # fastembed embedder used to embed messages at capture time so raw
+        # semantic recall works (G3). Mirrors mcp_server._handle_ingest.
+        self._raw_vector_store = None
+        self._raw_batch_embed_fn: Optional[BatchEmbedFn] = None
+        if config.raw_vector_enabled and config.database_dsn:
+            try:
+                from lossless_agent.store.vector_store import VectorStore
+                self._raw_vector_store = VectorStore(
+                    config.database_dsn,
+                    dim=config.embedding_dim,
+                    msg_dim=config.raw_vector_dim,
+                )
+                self._raw_batch_embed_fn = make_raw_vector_batch_embedder(config)
+                if self._raw_batch_embed_fn is None:
+                    self._raw_vector_store = None
+            except Exception:
+                logger.warning(
+                    "Failed to initialise raw-vector retrieval — capture embedding disabled",
+                    exc_info=True,
+                )
+                self._raw_vector_store = None
+                self._raw_batch_embed_fn = None
 
         # --- Compaction engine (with circuit breaker + context item store) ---
         self._engine = CompactionEngine(
@@ -193,13 +223,64 @@ class BaseAdapter(AgentAdapter):
     ) -> None:
         """Persist new messages and run incremental compaction."""
         conv = self._conv_store.get_or_create(session_key)
-        for msg in messages:
-            self._msg_store.append(
+
+        # G5: dedup re-ingested tails. If the capture hook is killed mid-run
+        # its cursor doesn't advance, so the next Stop re-sends a tail that
+        # already overlaps the stored suffix. Drop the overlapping prefix of
+        # the incoming batch that already matches the stored trailing messages.
+        new_messages = messages
+        if messages:
+            existing_tail = self._msg_store.tail(conv.id, len(messages))
+            skip = 0
+            max_overlap = min(len(existing_tail), len(messages))
+            for k in range(max_overlap, 0, -1):
+                base = len(existing_tail) - k
+                if all(
+                    existing_tail[base + i].role == messages[i]["role"]
+                    and existing_tail[base + i].content == messages[i].get("content", "")
+                    for i in range(k)
+                ):
+                    skip = k
+                    break
+            new_messages = messages[skip:]
+
+        appended = []
+        for msg in new_messages:
+            content = msg.get("content", "")
+            m = self._msg_store.append(
                 conversation_id=conv.id,
                 role=msg["role"],
-                content=msg.get("content", ""),
-                token_count=msg.get("token_count", len(msg.get("content", "").split())),
+                content=content,
+                # G7: estimate tokens as ~chars/4 (matches the compaction engine
+                # and lcm_ingest), not a word count.
+                token_count=msg.get("token_count", max(1, len(content) // 4)),
             )
+            appended.append((m, content))
+
+        # G3: embed newly-appended messages so raw-vector semantic recall works.
+        # Best-effort: never break capture on an embedding failure.
+        if (
+            self._raw_vector_store is not None
+            and self._raw_batch_embed_fn is not None
+            and appended
+        ):
+            try:
+                texts = []
+                msg_ids = []
+                for m, content in appended:
+                    if content and content.strip():
+                        texts.append(content)
+                        msg_ids.append(m.id)
+                if texts:
+                    embeddings = await self._raw_batch_embed_fn(texts)
+                    items = [
+                        (str(mid), conv.id, emb)
+                        for mid, emb in zip(msg_ids, embeddings)
+                    ]
+                    self._raw_vector_store.store_messages_batch(items)
+            except Exception:
+                logger.warning("Failed to embed messages at capture", exc_info=True)
+
         await self._engine.run_incremental(
             conv.id, self._config.assembler.max_context_tokens
         )
