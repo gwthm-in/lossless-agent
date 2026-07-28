@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Awaitable, List, Optional
 
@@ -121,6 +122,21 @@ def _format_summaries(summaries: List[Summary]) -> str:
     return "\n".join(parts)
 
 
+def _content_for_fallback(prompt: str) -> str:
+    """Extract the raw content (the <messages>/<summaries> block) from a summarizer prompt.
+
+    The deterministic truncation fallback must truncate the *content*, never the whole prompt:
+    otherwise a failed summarization persists the instruction preamble ("You are a
+    context-compaction summarization engine…") as durable memory. Falls back to the full prompt
+    only if no content block is found.
+    """
+    for tag in ("messages", "summaries"):
+        m = re.search(rf"<{tag}>\n(.*)\n</{tag}>", prompt, re.DOTALL)
+        if m:
+            return m.group(1)
+    return prompt
+
+
 # ------------------------------------------------------------------
 # Summarization escalation
 # ------------------------------------------------------------------
@@ -201,8 +217,10 @@ async def summarize_with_escalation(
                 return result
 
     # --- Level 3: fallback (deterministic truncation) ---
+    # Truncate the CONTENT, never the prompt — otherwise a failed summarization would persist the
+    # instruction preamble ("You are a context-compaction summarization engine…") as memory.
     target_chars = target_tokens * 4
-    source = result if result is not None else text
+    source = result if result is not None else _content_for_fallback(text)
     truncated = source[:target_chars]
     suffix = f" [Truncated from {input_tokens} tokens]"
     result = truncated + suffix
