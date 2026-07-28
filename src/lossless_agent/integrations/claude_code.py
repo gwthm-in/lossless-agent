@@ -98,10 +98,26 @@ def _store_label(config) -> str:
 
 
 def ensure_database(dsn: str) -> bool:
-    """Create the (empty) Postgres database if missing — lossless builds its own tables +
-    pgvector on first connect. Returns True if the store is usable."""
+    """True if the target Postgres database is reachable. If it doesn't exist yet, try to create
+    it via the server's admin (``postgres``) database — but never *require* admin access when the
+    target already exists: managed / least-privilege roles frequently cannot connect to the
+    ``postgres`` database at all, and doing so unconditionally would block capture."""
     try:
         import psycopg2
+    except Exception as e:
+        _log(f"ensure_database: psycopg2 not installed ({e}); install lossless-agent[postgres]")
+        return False
+
+    # 1) Target reachable? Then we're done — no admin connection needed.
+    target_err = None
+    try:
+        psycopg2.connect(dsn, connect_timeout=4).close()
+        return True
+    except Exception as e:
+        target_err = e
+
+    # 2) Target unreachable (typically: does not exist yet) — try to create it via admin.
+    try:
         from psycopg2 import sql
         dbname = dsn.rsplit("/", 1)[-1]
         admin = dsn.rsplit("/", 1)[0] + "/postgres"
@@ -116,8 +132,8 @@ def ensure_database(dsn: str) -> bool:
         finally:
             conn.close()
         return True
-    except Exception as e:
-        _log(f"ensure_database failed: {e}")
+    except Exception as admin_err:
+        _log(f"ensure_database: target unreachable ({target_err}); admin create failed ({admin_err})")
         return False
 
 

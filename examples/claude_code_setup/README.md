@@ -76,7 +76,7 @@ Everything is configured via **environment variables** — no code:
 | *(none)* | **Default:** a per-project **SQLite** store at `~/.lossless-agent/stores/lcm_<basename>_<hash>.db` — zero dependencies, no server. Works right after `pip install`. |
 | `LCM_DATABASE_DSN` | Opt into **Postgres** (unlocks the pgvector semantic layer): a full DSN, DB auto-created if missing. Requires `pip install 'lossless-agent[postgres]'` + a running Postgres. |
 | `LCM_DATABASE_PATH` | Explicit SQLite file path (shared store, not per-project). |
-| `LCM_SUMMARY_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` | **Recommended** summarizer — a direct API call (fast, no CLI cold-start). Also `openai` (OpenAI/LiteLLM/Azure/Groq). Unset → deterministic truncation fallback. |
+| `LCM_SUMMARY_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` | **Recommended** summarizer — a direct API call (fast, no CLI cold-start). Needs `pip install 'lossless-agent[anthropic]'`. Also `openai` (OpenAI/LiteLLM/Azure/Groq) via `lossless-agent[openai]`. Unset → deterministic truncation fallback. |
 | `LCM_SUMMARY_MODEL` | e.g. `claude-haiku-4-5-20251001`. |
 | `LCM_SUMMARIZE_COMMAND` | Alternative: an external `stdin → stdout` summarizer command. |
 | `LCM_LEAF_CHUNK_TOKENS`, `LCM_SUMMARY_TIMEOUT_MS`, … | Compaction tuning (honoured on the capture + ingest paths). |

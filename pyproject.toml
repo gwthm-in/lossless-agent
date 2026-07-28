@@ -23,6 +23,12 @@ local-embeddings = [
 postgres = [
     "psycopg2-binary>=2.9",
 ]
+anthropic = [
+    "anthropic>=0.40",
+]
+openai = [
+    "openai>=1.0",
+]
 dev = [
     "pytest",
     "pytest-cov",

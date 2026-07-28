@@ -67,3 +67,25 @@ def test_guard_env_short_circuits(monkeypatch):
     # When a summarizer's own subprocess triggers the hook, LCM_SUMMARIZING makes it a no-op.
     monkeypatch.setenv("LCM_SUMMARIZING", "1")
     assert cc.main([]) == 0
+
+
+def test_ensure_database_prefers_target_over_admin(monkeypatch):
+    # A reachable target DB must NOT require an admin (`postgres`) connection — least-privilege
+    # roles often can't reach it. Inject a fake psycopg2 so the test needs no real driver.
+    import sys
+    import types
+
+    calls = []
+
+    class _FakeConn:
+        autocommit = False
+
+        def close(self):
+            pass
+
+    fake = types.ModuleType("psycopg2")
+    fake.connect = lambda dsn, **kw: (calls.append(dsn), _FakeConn())[1]
+    monkeypatch.setitem(sys.modules, "psycopg2", fake)
+
+    assert cc.ensure_database("postgresql://user@host:5432/mydb") is True
+    assert calls == ["postgresql://user@host:5432/mydb"]   # target only; never /postgres
