@@ -342,28 +342,39 @@ class CompactionEngine:
         if not uncompacted:
             return []
 
-        # Oversized-single-message guard: a message whose own token_count
-        # exceeds the whole chunk budget can never batch with peers to reach
-        # ``leaf_min_fanout``.  Left untreated it stalls the leaf pass forever
-        # and keeps the conversation permanently over budget (G9).  Compact it
-        # on its own — its summariser input is bounded in ``compact_leaf`` and
-        # the leaf still links the full message so ``lcm_expand`` recovers it.
-        if uncompacted[0].token_count > self.cfg.leaf_chunk_tokens:
-            return [uncompacted[0]]
-
-        if len(uncompacted) < self.cfg.leaf_min_fanout:
-            return []
-
         # Take oldest chunk up to token limit
         chunk: List[Message] = []
         total_tokens = 0
         for m in uncompacted:
             if total_tokens + m.token_count > self.cfg.leaf_chunk_tokens and chunk:
+                # We are blocked by *m*.  A message whose own token_count exceeds
+                # the whole chunk budget (an oversized message, at ANY position)
+                # can never batch with peers, so it would otherwise indefinitely
+                # block the smaller messages ahead of it from ever compacting —
+                # the giant never reaches the head and the conversation stays
+                # permanently over budget (G9).  When that happens and we have
+                # not yet gathered enough messages for ``leaf_min_fanout``,
+                # absorb the oversized message into this chunk so the pass makes
+                # progress.  Its summariser input is truncated in
+                # ``compact_leaf`` and its real message id is still linked, so
+                # ``lcm_expand`` recovers the full content.
+                if (
+                    m.token_count > self.cfg.leaf_chunk_tokens
+                    and len(chunk) < self.cfg.leaf_min_fanout
+                ):
+                    chunk.append(m)
                 break
             chunk.append(m)
             total_tokens += m.token_count
 
-        if len(chunk) < self.cfg.leaf_min_fanout:
+        # Waive the ``leaf_min_fanout`` floor when the chunk contains an
+        # oversized message (at the head, or absorbed above): progress matters
+        # more than fan-out in this pathological case since the giant cannot be
+        # batched with anything else anyway.
+        chunk_has_oversized = any(
+            m.token_count > self.cfg.leaf_chunk_tokens for m in chunk
+        )
+        if not chunk_has_oversized and len(chunk) < self.cfg.leaf_min_fanout:
             return []
 
         return chunk
@@ -391,14 +402,27 @@ class CompactionEngine:
         conversation reports a value below the threshold and the loop
         terminates.
         """
-        compacted_ids = set(self._sum.get_compacted_message_ids(conv_id))
-        msg_tokens = sum(
-            m.token_count
-            for m in self._msg.get_messages(conv_id)
-            if m.id not in compacted_ids
+        summaries = self._sum.get_by_conversation(conv_id)
+
+        # Messages still loaded verbatim = all message tokens minus those
+        # already covered by a leaf summary.  A leaf's ``source_token_count`` is
+        # exactly the summed ``token_count`` of the messages it compacted, and
+        # ``select_chunk`` never lets a message join two leaves, so summing leaf
+        # ``source_token_count`` yields the compacted-message total via a single
+        # aggregate query instead of scanning every message row on the hot path.
+        compacted_msg_tokens = sum(
+            s.source_token_count for s in summaries if s.kind == "leaf"
+        )
+        msg_tokens = max(
+            0, self._msg.total_tokens(conv_id) - compacted_msg_tokens
         )
 
-        summaries = self._sum.get_by_conversation(conv_id)
+        # Root summaries (not a child of any other summary) are what the
+        # assembler loads; condensed nodes replace their children, so the
+        # children are skipped.
+        # TODO(perf): the child-id union below still issues one query per
+        # summary; if summary counts grow large, add a store method that returns
+        # the conversation's child_ids (or root token sum) in a single query.
         child_ids: set = set()
         for s in summaries:
             child_ids.update(self._sum.get_child_ids(s.summary_id))

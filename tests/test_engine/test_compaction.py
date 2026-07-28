@@ -434,6 +434,61 @@ class TestOversizedMessage:
         assert len(stored.content) == len("lorem ipsum dolor sit amet " * 15_000)
         assert giant.id in self.sum_store.get_source_message_ids(leaf.summary_id)
 
+    def _seed_giant_not_at_head(self):
+        # Layout: [small, small, GIANT, small, small, small].  With
+        # fresh_tail_count=2 the eligible prefix is [small, small, GIANT, small]
+        # so the giant is the 3rd (not head) uncompacted message.
+        s0 = self.msg_store.append(self.conv.id, "user", "hi there", token_count=30)
+        s1 = self.msg_store.append(
+            self.conv.id, "assistant", "a small reply", token_count=30
+        )
+        giant_content = "lorem ipsum dolor sit amet " * 15_000
+        giant = self.msg_store.append(
+            self.conv.id, "user", giant_content, token_count=100_000
+        )
+        for _ in range(3):
+            self.msg_store.append(self.conv.id, "assistant", "tail msg", token_count=30)
+        return s0, s1, giant
+
+    def test_select_chunk_absorbs_oversized_not_at_head(self):
+        # Regression (G9 residual): a giant that is NOT uncompacted[0] must not
+        # stall the leaf pass.  select_chunk should absorb it (waiving
+        # leaf_min_fanout=4) so the pass makes progress.
+        s0, s1, giant = self._seed_giant_not_at_head()
+        chunk = self.engine.select_chunk(self.conv.id)
+        assert chunk != []
+        ids = {m.id for m in chunk}
+        assert giant.id in ids
+        assert {s0.id, s1.id} <= ids
+
+    @pytest.mark.asyncio
+    async def test_giant_not_at_head_makes_progress_and_unblocks(self):
+        s0, s1, giant = self._seed_giant_not_at_head()
+        limit = 110_000
+        from lossless_agent.engine.compaction import CompactionUrgency
+
+        # Initially permanently BLOCKING under the old (head-only) guard.
+        assert (
+            self.engine.compaction_urgency(self.conv.id, limit)
+            is CompactionUrgency.BLOCKING
+        )
+
+        # compact_leaf makes progress instead of returning None.
+        leaf = await self.engine.compact_leaf(self.conv.id)
+        assert leaf is not None
+        linked = self.sum_store.get_source_message_ids(leaf.summary_id)
+        assert giant.id in linked
+        assert {s0.id, s1.id} <= set(linked)
+        # Full content preserved in storage for lcm_expand.
+        stored = {m.id: m for m in self.msg_store.get_messages(self.conv.id)}
+        assert len(stored[giant.id].content) == len(
+            "lorem ipsum dolor sit amet " * 15_000
+        )
+
+        # Sweeping to completion drives the conversation out of BLOCKING.
+        await self.engine.compact_until_under(self.conv.id, limit)
+        assert self.engine.needs_compaction(self.conv.id, limit) is False
+
 
 # ===================================================================
 # SummaryStore new methods
