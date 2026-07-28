@@ -321,6 +321,121 @@ class TestRunIncremental:
 
 
 # ===================================================================
+# Fix A: trigger based on uncompacted context (G9)
+# ===================================================================
+
+class TestUncompactedContextTrigger:
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.conv_store, self.msg_store, self.sum_store, self.engine, _ = _make_engine(
+            db,
+            config=CompactionConfig(
+                fresh_tail_count=2,
+                leaf_chunk_tokens=500,
+                leaf_min_fanout=2,
+                condensed_min_fanout=3,
+            ),
+        )
+        self.conv = self.conv_store.get_or_create("s1", "Test")
+
+    def test_uncompacted_equals_total_when_no_summaries(self):
+        _seed_messages(self.msg_store, self.conv.id, 10, token_count=100)
+        assert self.engine.uncompacted_context_tokens(self.conv.id) == 1000
+        assert self.engine.uncompacted_context_tokens(
+            self.conv.id
+        ) == self.msg_store.total_tokens(self.conv.id)
+
+    @pytest.mark.asyncio
+    async def test_fully_compacted_conversation_reports_none(self):
+        # 2000 tokens vs limit 2000 -> initially BLOCKING (ratio 1.0)
+        _seed_messages(self.msg_store, self.conv.id, 20, token_count=100)
+        limit = 2000
+        from lossless_agent.engine.compaction import CompactionUrgency
+
+        assert (
+            self.engine.compaction_urgency(self.conv.id, limit)
+            is CompactionUrgency.BLOCKING
+        )
+        before = self.engine.uncompacted_context_tokens(self.conv.id)
+
+        created = await self.engine.compact_until_under(self.conv.id, limit)
+        assert created  # it actually did work
+
+        after = self.engine.uncompacted_context_tokens(self.conv.id)
+        # Trigger must strictly DECREASE as compaction proceeds
+        assert after < before
+        # A fully-swept conversation no longer needs compaction (loop terminates)
+        assert self.engine.needs_compaction(self.conv.id, limit) is False
+        assert (
+            self.engine.compaction_urgency(self.conv.id, limit)
+            is CompactionUrgency.NONE
+        )
+
+    @pytest.mark.asyncio
+    async def test_trigger_decreases_after_leaf_pass(self):
+        _seed_messages(self.msg_store, self.conv.id, 20, token_count=100)
+        before = self.engine.uncompacted_context_tokens(self.conv.id)
+        leaf = await self.engine.compact_leaf(self.conv.id)
+        assert leaf is not None
+        after = self.engine.uncompacted_context_tokens(self.conv.id)
+        # Messages swapped for a small leaf summary -> pressure drops
+        assert after < before
+
+
+# ===================================================================
+# Fix B: oversized single-message chunk is bounded (G9)
+# ===================================================================
+
+class TestOversizedMessage:
+    @pytest.fixture(autouse=True)
+    def setup(self, db):
+        self.conv_store, self.msg_store, self.sum_store, self.engine, self.mock_fn = (
+            _make_engine(
+                db,
+                config=CompactionConfig(
+                    fresh_tail_count=2,
+                    leaf_chunk_tokens=500,
+                    leaf_min_fanout=4,  # deliberately high to prove the bypass
+                ),
+            )
+        )
+        self.conv = self.conv_store.get_or_create("s1", "Test")
+
+    def _seed_with_giant(self):
+        # Giant message: ~100k tokens (~405k chars) of realistic prose (not
+        # media/binary, which the annotator would otherwise collapse), far
+        # over leaf_chunk_tokens.
+        giant_content = "lorem ipsum dolor sit amet " * 15_000
+        giant = self.msg_store.append(
+            self.conv.id, "user", giant_content, token_count=100_000
+        )
+        rest = _seed_messages(self.msg_store, self.conv.id, 4, token_count=10)
+        return giant, rest
+
+    def test_select_chunk_isolates_oversized_message(self):
+        giant, _ = self._seed_with_giant()
+        chunk = self.engine.select_chunk(self.conv.id)
+        # Bypasses leaf_min_fanout=4 because a single message can't share a chunk
+        assert len(chunk) == 1
+        assert chunk[0].id == giant.id
+
+    @pytest.mark.asyncio
+    async def test_compact_leaf_bounds_summarizer_input(self):
+        giant, _ = self._seed_with_giant()
+        leaf = await self.engine.compact_leaf(self.conv.id)
+        assert leaf is not None
+        # The summariser was called with bounded text, not the full 400k chars
+        self.mock_fn.assert_called_once()
+        call_text = self.mock_fn.call_args[0][0]
+        assert len(call_text) < 20_000
+        assert "truncated" in call_text
+        # The stored message is untouched and the leaf still links it
+        stored = self.msg_store.get_messages(self.conv.id)[0]
+        assert len(stored.content) == len("lorem ipsum dolor sit amet " * 15_000)
+        assert giant.id in self.sum_store.get_source_message_ids(leaf.summary_id)
+
+
+# ===================================================================
 # SummaryStore new methods
 # ===================================================================
 

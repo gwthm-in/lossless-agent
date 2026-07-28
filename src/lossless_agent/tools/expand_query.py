@@ -1,8 +1,9 @@
 """Sub-agent expansion tool for navigating the DAG and answering questions."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 from lossless_agent.engine.expansion_auth import ExpansionAuthManager
 from lossless_agent.engine.expansion_policy import (
@@ -13,11 +14,46 @@ from lossless_agent.store.database import Database
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
 from lossless_agent.tools.recall import (
+    GrepResult,
     lcm_grep,
     lcm_describe,
     lcm_expand,
     DescribeResult,
 )
+
+# Common English stop-words dropped when extracting keywords from a
+# natural-language question.  Kept small and generic on purpose.
+_STOPWORDS = frozenset(
+    """
+    a about above after again against all am an and any are aren't as at be
+    because been before being below between both but by can can't cannot could
+    couldn't did didn't do does doesn't doing don't down during each few for
+    from further had hadn't has hasn't have haven't having he her here hers him
+    his how i i'd i'll i'm i've if in into is isn't it it's its me more most my
+    no nor not of off on once only or other our ours out over own same she
+    should shouldn't so some such than that the their theirs them then there
+    these they this those through to too under until up us very was wasn't we
+    were weren't what when where which while who whom why will with won't would
+    wouldn't you your yours
+    """.split()
+)
+
+
+def _extract_keywords(query: str) -> List[str]:
+    """Extract salient keywords from a natural-language query.
+
+    Lower-cases, splits on non-word characters, drops stop-words and very
+    short tokens.  Order is preserved and duplicates removed so the resulting
+    keywords can be OR-searched individually.
+    """
+    seen: set = set()
+    keywords: List[str] = []
+    for raw in re.findall(r"[A-Za-z0-9_]+", query.lower()):
+        if len(raw) <= 2 or raw in _STOPWORDS or raw in seen:
+            continue
+        seen.add(raw)
+        keywords.append(raw)
+    return keywords
 
 
 @dataclass
@@ -135,6 +171,13 @@ class ExpansionOrchestrator:
         )
 
         if not grep_results:
+            # A full natural-language question is AND-ed over every term by the
+            # FTS backend, so realistic questions ("What did we decide about
+            # authenticating the summarizer?") match nothing.  Retry with a
+            # relaxed OR search over salient keywords before giving up.
+            grep_results = self._relaxed_grep(conversation_id, query, limit=5)
+
+        if not grep_results:
             # No matches - call expand_fn with empty context
             if steps >= max_steps:
                 return self._empty_result(steps)
@@ -215,18 +258,55 @@ class ExpansionOrchestrator:
             steps_taken=steps,
         )
 
+    def _relaxed_grep(
+        self, conversation_id: int, query: str, limit: int,
+    ) -> List[GrepResult]:
+        """OR-search salient keywords and rank hits by how many they match.
+
+        Used as a fallback when the strict (AND-over-all-terms) grep for a
+        natural-language question returns nothing.  Each keyword is grepped
+        independently; results are merged, de-duplicated, and ordered so that
+        entries matching more keywords rank first (approximating relevance
+        while staying permissive).
+        """
+        keywords = _extract_keywords(query)
+        if not keywords:
+            return []
+
+        scores: Dict[tuple, int] = {}
+        results_by_key: Dict[tuple, GrepResult] = {}
+        for kw in keywords:
+            hits = lcm_grep(
+                self.db,
+                kw,
+                scope="all",
+                conversation_id=conversation_id,
+                limit=limit * 2,
+            )
+            for r in hits:
+                key = (r.type, r.id)
+                scores[key] = scores.get(key, 0) + 1
+                results_by_key.setdefault(key, r)
+
+        ranked = sorted(
+            results_by_key.keys(), key=lambda k: scores[k], reverse=True
+        )
+        return [results_by_key[k] for k in ranked[:limit]]
+
     def _build_prompt(self, query: str, context_parts: List[str]) -> str:
         """Build the synthesis prompt for expand_fn."""
         strategy = (
-            "You are a recall agent. Your job is to find information about: "
-            f"{query}. You have access to lcm_grep, lcm_describe, and "
-            "lcm_expand tools. Search the conversation history, drill into "
-            "relevant summaries, and synthesize an answer. Cite summary IDs."
+            "You are a recall agent. Answer the user's question using ONLY the "
+            "retrieved context provided below. Cite the summary IDs (sum_...) "
+            "you rely on. Do not mention tools or your own access to them."
         )
         if not context_parts:
             return (
-                f"{strategy}\n\nNo relevant context found. "
-                "Provide a minimal answer indicating no information was found."
+                f"{strategy}\n\nQuestion: {query}\n\n"
+                "No relevant context was found in stored memory. Reply "
+                "concisely that no matching memory was found for this question. "
+                "Do not claim you lack tools or access — simply state that "
+                "nothing relevant was found in memory."
             )
         context_block = "\n".join(context_parts)
         return (

@@ -87,11 +87,28 @@ def _estimate_tokens(text: str) -> int:
 _media_annotator = MediaAnnotator()
 
 
-def _format_messages(messages: List[Message]) -> str:
-    """Format messages into a single text block for the summariser."""
+def _format_messages(
+    messages: List[Message], max_message_tokens: Optional[int] = None
+) -> str:
+    """Format messages into a single text block for the summariser.
+
+    When *max_message_tokens* is set, any single message whose annotated
+    content exceeds that many tokens is truncated **for the summariser input
+    only** (the stored message is untouched, so ``lcm_expand`` still recovers
+    the full content).  This prevents one enormous message (e.g. a 96K-token
+    file/skill dump) from producing a prompt that blows up or stalls the
+    summariser call.
+    """
+    max_chars = max_message_tokens * 4 if max_message_tokens else None
     parts = []
     for m in messages:
         content = _media_annotator.annotate(m.content)
+        if max_chars is not None and len(content) > max_chars:
+            original_tokens = _estimate_tokens(content)
+            content = (
+                content[:max_chars]
+                + f"\n[... truncated {original_tokens} tokens for summarization ...]"
+            )
         parts.append(f"[{m.role}] {content}")
     return "\n".join(parts)
 
@@ -322,6 +339,18 @@ class CompactionEngine:
         compacted_ids = set(self._sum.get_compacted_message_ids(conv_id))
         uncompacted = [m for m in eligible if m.id not in compacted_ids]
 
+        if not uncompacted:
+            return []
+
+        # Oversized-single-message guard: a message whose own token_count
+        # exceeds the whole chunk budget can never batch with peers to reach
+        # ``leaf_min_fanout``.  Left untreated it stalls the leaf pass forever
+        # and keeps the conversation permanently over budget (G9).  Compact it
+        # on its own — its summariser input is bounded in ``compact_leaf`` and
+        # the leaf still links the full message so ``lcm_expand`` recovers it.
+        if uncompacted[0].token_count > self.cfg.leaf_chunk_tokens:
+            return [uncompacted[0]]
+
         if len(uncompacted) < self.cfg.leaf_min_fanout:
             return []
 
@@ -343,15 +372,57 @@ class CompactionEngine:
     # Needs-compaction check
     # ------------------------------------------------------------------
 
+    def uncompacted_context_tokens(self, conv_id: int) -> int:
+        """Estimate the tokens the assembler would actually load for *conv_id*.
+
+        This is the true compaction pressure and, crucially, it **decreases**
+        as compaction proceeds (unlike ``msg_store.total_tokens`` which sums all
+        retained messages and never drops).  It is the sum of:
+
+        * messages not yet covered by a leaf summary (fresh tail + any
+          not-yet-compacted prefix), plus
+        * the token cost of the *root* summaries (nodes that are not a child of
+          another summary), mirroring the assembler which only loads top-level
+          nodes and skips summaries whose parent is already included.
+
+        A leaf pass swaps ~``leaf_chunk_tokens`` of messages for one small leaf
+        summary; a condensed pass replaces several root leaves with one smaller
+        condensed node.  Both strictly reduce this figure, so a fully-swept
+        conversation reports a value below the threshold and the loop
+        terminates.
+        """
+        compacted_ids = set(self._sum.get_compacted_message_ids(conv_id))
+        msg_tokens = sum(
+            m.token_count
+            for m in self._msg.get_messages(conv_id)
+            if m.id not in compacted_ids
+        )
+
+        summaries = self._sum.get_by_conversation(conv_id)
+        child_ids: set = set()
+        for s in summaries:
+            child_ids.update(self._sum.get_child_ids(s.summary_id))
+        summary_tokens = sum(
+            s.token_count for s in summaries if s.summary_id not in child_ids
+        )
+
+        return msg_tokens + summary_tokens
+
     def needs_compaction(self, conv_id: int, context_limit: int) -> bool:
-        """Return True when total conversation tokens exceed the soft threshold."""
+        """Return True when uncompacted context exceeds the soft threshold."""
         return self.compaction_urgency(conv_id, context_limit) is not CompactionUrgency.NONE
 
     def compaction_urgency(self, conv_id: int, context_limit: int) -> CompactionUrgency:
-        """Return how urgently compaction is needed (dual-threshold)."""
+        """Return how urgently compaction is needed (dual-threshold).
+
+        Urgency is derived from the *uncompacted* context size (see
+        :meth:`uncompacted_context_tokens`) rather than the immutable running
+        total of all messages, so a conversation that has already been swept
+        below the hard threshold no longer reports ``BLOCKING`` every turn.
+        """
         if context_limit <= 0:
             return CompactionUrgency.NONE
-        total = self._msg.total_tokens(conv_id)
+        total = self.uncompacted_context_tokens(conv_id)
         ratio = total / context_limit
         soft = self.cfg.effective_soft_threshold
         hard = self.cfg.hard_threshold
@@ -373,7 +444,12 @@ class CompactionEngine:
         if not chunk:
             return None
 
-        messages_text = _format_messages(chunk)
+        # Bound each message's contribution to the summariser so one enormous
+        # message cannot produce an oversized prompt (the stored message is
+        # untouched — only the summarisation input is capped).
+        messages_text = _format_messages(
+            chunk, max_message_tokens=self.cfg.leaf_chunk_tokens
+        )
 
         # Resolve prior summary context if not provided
         if not previous_summary_content:
@@ -584,7 +660,10 @@ class CompactionEngine:
         all_created: List[Summary] = []
 
         for _ in range(max_rounds):
-            tokens_before = self._msg.total_tokens(conv_id)
+            # Measure the *uncompacted* context (what the assembler would load)
+            # so the progress guard tracks a figure that actually shrinks as
+            # summaries replace messages; ``msg_store.total_tokens`` never drops.
+            tokens_before = self.uncompacted_context_tokens(conv_id)
             if not self.needs_compaction(conv_id, context_limit):
                 break
 
@@ -610,7 +689,7 @@ class CompactionEngine:
             if not created:
                 break
 
-            tokens_after = self._msg.total_tokens(conv_id)
+            tokens_after = self.uncompacted_context_tokens(conv_id)
             if tokens_after >= tokens_before:
                 # No progress
                 break

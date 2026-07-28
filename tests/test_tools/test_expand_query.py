@@ -179,6 +179,64 @@ class TestExpandFnCalledWithContext:
         assert "Retrieved context" in prompt_arg or "context" in prompt_arg.lower()
 
 
+class TestExpandQueryNaturalLanguage:
+    """Fix C: natural-language questions must retrieve results, not confabulate."""
+
+    @pytest.mark.asyncio
+    async def test_nl_question_retrieves_via_relaxed_grep(self, seeded, expand_fn):
+        orch = ExpansionOrchestrator(
+            db=seeded["db"],
+            msg_store=seeded["ms"],
+            sum_store=seeded["ss"],
+            expand_fn=expand_fn,
+        )
+        # A full NL question is AND-ed over every term by FTS and matches nothing
+        # on a strict grep; the relaxed OR fallback should still find memory.
+        question = "What did we decide about quantum entanglement in our discussion?"
+        result = await orch.expand_query(seeded["conv"].id, question)
+
+        assert len(result.cited_summaries) > 0
+        # Synthesis ran over retrieved context (not the empty-context branch)
+        expand_fn.assert_called_once()
+        prompt_arg = expand_fn.call_args[0][0]
+        assert "Retrieved context" in prompt_arg
+
+    @pytest.mark.asyncio
+    async def test_no_match_prompt_does_not_confabulate_tools(self, seeded, expand_fn):
+        orch = ExpansionOrchestrator(
+            db=seeded["db"],
+            msg_store=seeded["ms"],
+            sum_store=seeded["ss"],
+            expand_fn=expand_fn,
+        )
+        await orch.expand_query(seeded["conv"].id, "xyznonexistent zzzmissing")
+
+        prompt_arg = expand_fn.call_args[0][0]
+        # The empty-results prompt must not name internal tools (root cause of
+        # the "I don't have access to the lcm_grep tools" confabulation) and
+        # must instruct the model to report no matching memory.
+        assert "lcm_grep" not in prompt_arg
+        assert "lcm_describe" not in prompt_arg
+        assert "lcm_expand" not in prompt_arg
+        assert "no matching memory" in prompt_arg.lower()
+
+
+class TestExtractKeywords:
+    def test_drops_stopwords_and_short_tokens(self):
+        from lossless_agent.tools.expand_query import _extract_keywords
+
+        kws = _extract_keywords(
+            "What did we decide about authenticating the summarizer?"
+        )
+        assert "decide" in kws
+        assert "authenticating" in kws
+        assert "summarizer" in kws
+        # Stop-words and 2-char tokens dropped
+        assert "what" not in kws
+        assert "we" not in kws
+        assert "the" not in kws
+
+
 class TestResultContainsStepsTaken:
     @pytest.mark.asyncio
     async def test_steps_taken_count(self, seeded, expand_fn):
