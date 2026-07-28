@@ -104,6 +104,20 @@ class TestSummarizeWithEscalation:
         assert "[Truncated from" in result
 
     @pytest.mark.asyncio
+    async def test_fallback_truncates_content_not_prompt_preamble(self):
+        """Regression: on summarizer failure with a real prompt, the truncation fallback must
+        truncate the CONTENT, never persist the instruction preamble as the 'summary' (this is
+        how a failed condensation ended up storing 'You are merging …' as durable memory)."""
+        from lossless_agent.engine.summarize_prompt import build_condensed_prompt
+        prompt = build_condensed_prompt("MARKER_leaf_content_zzz " * 20, target_tokens=200, depth=1)
+        fn = AsyncMock(side_effect=RuntimeError("boom"))
+        result = await summarize_with_escalation(prompt, fn, target_tokens=200)
+        assert result is not None
+        assert "You are merging" not in result
+        assert "context-compaction summarization engine" not in result
+        assert "MARKER_leaf_content_zzz" in result
+
+    @pytest.mark.asyncio
     async def test_auth_error_returns_none(self):
         """LcmProviderAuthError -> return None."""
         fn = AsyncMock(side_effect=LcmProviderAuthError("bad key"))
