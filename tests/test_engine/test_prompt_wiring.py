@@ -66,8 +66,8 @@ class TestLeafPromptContainsPreviousContext:
         prompt1 = received_prompts[0]
 
         # Verify structured prompt elements
-        assert "Target token count:" in prompt1
-        assert "Operator instructions: Focus on code changes" in prompt1
+        assert "summary" in prompt1.lower() and "not a reply" in prompt1.lower()
+        assert "Additional operator instructions: Focus on code changes" in prompt1
         assert "<messages>" in prompt1
         assert "</messages>" in prompt1
 
@@ -100,7 +100,7 @@ class TestLeafPromptContainsPreviousContext:
         assert "Preserve all function signatures" in received_prompts[0]
 
     def test_leaf_prompt_without_custom_instructions(self, db):
-        """Without custom_instructions, prompt should say '(none)'."""
+        """Without custom_instructions, the prompt should omit the operator-instructions line."""
         conv, msg_store, sum_store = _seed_conversation(db)
 
         received_prompts = []
@@ -113,7 +113,7 @@ class TestLeafPromptContainsPreviousContext:
         engine = CompactionEngine(msg_store, sum_store, capture_summarize, config=config)
 
         asyncio.run(engine.compact_leaf(conv.id))
-        assert "Operator instructions: (none)" in received_prompts[0]
+        assert "operator instructions" not in received_prompts[0].lower()
 
 
 class TestCondensedPromptWiring:
@@ -153,8 +153,8 @@ class TestCondensedPromptWiring:
             # The last prompt should be the condensed one
             condensed_prompt = received_prompts[-1]
             assert "<summaries>" in condensed_prompt
-            assert "Operator instructions: Keep API endpoints" in condensed_prompt
-            assert "Guidance:" in condensed_prompt
+            assert "Additional operator instructions: Keep API endpoints" in condensed_prompt
+            assert "Emphasis:" in condensed_prompt
 
 
 class TestFullSweepChainsPreviousSummary:

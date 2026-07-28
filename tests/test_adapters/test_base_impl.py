@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from lossless_agent.adapters.base import AgentAdapter, LCMConfig
 from lossless_agent.adapters.base_impl import BaseAdapter
@@ -179,6 +179,143 @@ def _make_msg(id, conv_id, seq, role, content, token_count=10,
         tool_call_id=tool_call_id, tool_name=tool_name,
         created_at="2024-01-01T00:00:00",
     )
+
+
+class TestOnTurnEndCapture:
+    """Capture-path fixes: token estimate (G7), dedup (G5), embedding (G3)."""
+
+    @pytest.mark.asyncio
+    async def test_token_count_uses_chars_over_four(self, config, summarize_fn):
+        # G7: fallback token_count must be ~chars/4, not a word count.
+        a = GenericAdapter(config, summarize_fn)
+        content = "the quick brown fox jumps"  # 25 chars, 5 words
+        await a.on_turn_end("s1", [{"role": "user", "content": content}])
+
+        conv = a._conv_store.get_or_create("s1")
+        msgs = a._msg_store.get_messages(conv.id)
+        assert len(msgs) == 1
+        assert msgs[0].token_count == max(1, len(content) // 4)  # 6, not 5
+        a._db.close()
+
+    @pytest.mark.asyncio
+    async def test_explicit_token_count_preserved(self, config, summarize_fn):
+        a = GenericAdapter(config, summarize_fn)
+        await a.on_turn_end(
+            "s1", [{"role": "user", "content": "hi", "token_count": 99}]
+        )
+        conv = a._conv_store.get_or_create("s1")
+        msgs = a._msg_store.get_messages(conv.id)
+        assert msgs[0].token_count == 99
+        a._db.close()
+
+    @pytest.mark.asyncio
+    async def test_reingesting_identical_tail_appends_zero_rows(
+        self, config, summarize_fn
+    ):
+        # G5: re-sending the exact same batch must be a no-op.
+        a = GenericAdapter(config, summarize_fn)
+        batch = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ]
+        await a.on_turn_end("s1", batch)
+        conv = a._conv_store.get_or_create("s1")
+        assert a._msg_store.count(conv.id) == 2
+
+        # Re-ingest the identical tail — should append nothing.
+        await a.on_turn_end("s1", batch)
+        assert a._msg_store.count(conv.id) == 2
+        a._db.close()
+
+    @pytest.mark.asyncio
+    async def test_partial_overlap_appends_only_new(self, config, summarize_fn):
+        # G5: overlapping prefix dropped, genuinely new tail appended.
+        a = GenericAdapter(config, summarize_fn)
+        await a.on_turn_end(
+            "s1",
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi there"},
+            ],
+        )
+        conv = a._conv_store.get_or_create("s1")
+        assert a._msg_store.count(conv.id) == 2
+
+        # Hook re-sends the last 2 then adds 2 new ones.
+        await a.on_turn_end(
+            "s1",
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi there"},
+                {"role": "user", "content": "how are you"},
+                {"role": "assistant", "content": "great"},
+            ],
+        )
+        msgs = a._msg_store.get_messages(conv.id)
+        assert [m.content for m in msgs] == [
+            "hello", "hi there", "how are you", "great",
+        ]
+        a._db.close()
+
+    @pytest.mark.asyncio
+    async def test_no_overlap_appends_all(self, config, summarize_fn):
+        a = GenericAdapter(config, summarize_fn)
+        await a.on_turn_end("s1", [{"role": "user", "content": "first"}])
+        await a.on_turn_end("s1", [{"role": "user", "content": "second"}])
+        conv = a._conv_store.get_or_create("s1")
+        assert a._msg_store.count(conv.id) == 2
+        a._db.close()
+
+    @pytest.mark.asyncio
+    async def test_embedding_invoked_for_new_messages(self, config, summarize_fn):
+        # G3: newly-appended messages are embedded and stored.
+        a = GenericAdapter(config, summarize_fn)
+        embed_fn = AsyncMock(return_value=[[0.1, 0.2, 0.3, 0.4]])
+        vector_store = MagicMock()
+        a._raw_batch_embed_fn = embed_fn
+        a._raw_vector_store = vector_store
+
+        await a.on_turn_end("s1", [{"role": "user", "content": "embed me"}])
+
+        embed_fn.assert_awaited_once_with(["embed me"])
+        vector_store.store_messages_batch.assert_called_once()
+        items = vector_store.store_messages_batch.call_args[0][0]
+        assert len(items) == 1
+        assert items[0][2] == [0.1, 0.2, 0.3, 0.4]
+        a._db.close()
+
+    @pytest.mark.asyncio
+    async def test_embedding_skips_deduped_messages(self, config, summarize_fn):
+        # G3 + G5: dropped duplicates must not be embedded.
+        a = GenericAdapter(config, summarize_fn)
+        batch = [{"role": "user", "content": "hello"}]
+        await a.on_turn_end("s1", batch)
+
+        embed_fn = AsyncMock(return_value=[])
+        vector_store = MagicMock()
+        a._raw_batch_embed_fn = embed_fn
+        a._raw_vector_store = vector_store
+
+        # Re-send identical batch: nothing new -> no embed call.
+        await a.on_turn_end("s1", batch)
+        embed_fn.assert_not_awaited()
+        vector_store.store_messages_batch.assert_not_called()
+        a._db.close()
+
+    @pytest.mark.asyncio
+    async def test_embedding_failure_does_not_break_capture(
+        self, config, summarize_fn
+    ):
+        # Best-effort: an embedding error must not raise out of on_turn_end.
+        a = GenericAdapter(config, summarize_fn)
+        a._raw_batch_embed_fn = AsyncMock(side_effect=RuntimeError("boom"))
+        a._raw_vector_store = MagicMock()
+
+        await a.on_turn_end("s1", [{"role": "user", "content": "still stored"}])
+
+        conv = a._conv_store.get_or_create("s1")
+        assert a._msg_store.count(conv.id) == 1  # message persisted anyway
+        a._db.close()
 
 
 class TestFreshTailToolCallProtection:

@@ -283,9 +283,11 @@ class TestCompactUntilUnder:
         """If tokens don't decrease, stop looping."""
         conv_store, msg_store, sum_store, engine, mock_fn = _make_engine(db)
         conv = conv_store.get_or_create("s1", "Test")
-        # Need to be over budget but compaction can't help
-        # (only 3 messages with tail=2 -> only 1 eligible, below min_fanout)
-        _seed_messages(msg_store, conv.id, 3, token_count=10000)
+        # Over budget (90 uncompacted tokens vs limit 100 -> BLOCKING) but
+        # compaction can't help: only 3 messages with tail=2 -> 1 eligible,
+        # below min_fanout=2, and no single message exceeds leaf_chunk_tokens
+        # (so the oversized-message guard does not fire either).
+        _seed_messages(msg_store, conv.id, 3, token_count=30)
         result = await engine.compact_until_under(conv.id, 100)
         assert result == []
 
