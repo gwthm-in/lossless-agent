@@ -809,8 +809,10 @@ def cli() -> None:
     parser = argparse.ArgumentParser(description="LCM MCP Server (stdio transport)")
     parser.add_argument(
         "--db-path",
-        default="~/.lossless-agent/lcm.db",
-        help="Path to the lossless-agent SQLite database (ignored when --db-dsn is set)",
+        default=None,
+        help="Path to the SQLite database (ignored when --db-dsn is set). When omitted, falls "
+             "back to LCM_DATABASE_PATH / LCM_DATABASE_DSN (default ~/.lossless-agent/lcm.db) so "
+             "the server can share one store with the capture hook.",
     )
     parser.add_argument(
         "--db-dsn",

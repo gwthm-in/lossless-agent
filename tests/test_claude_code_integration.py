@@ -14,21 +14,26 @@ def test_project_db_name_is_deterministic_and_slugged():
     assert cc.project_db_name("/a/My-Project") != cc.project_db_name("/b/My-Project")
 
 
-def test_default_store_path_is_per_project_sqlite():
-    p = cc.default_store_path("/Users/x/repos/widget")
-    assert p.endswith(".db")
-    assert "/stores/" in p
-    assert cc.project_db_name("/Users/x/repos/widget") in p
-
-
-def test_build_config_default_is_sqlite_no_server(monkeypatch):
-    # The documented "seamless" path (no env) must NOT require Postgres.
+def test_build_config_default_is_shared_sqlite(monkeypatch):
+    # The zero-config path must be SQLite (no Postgres) AND the library default path — the same
+    # store the MCP server defaults to, so recall sees captures out of the box.
     monkeypatch.delenv("LCM_DATABASE_DSN", raising=False)
     monkeypatch.delenv("LCM_DATABASE_PATH", raising=False)
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/x/repos/widget")
-    config = cc.build_config({"cwd": "/ignored/when/project/dir/set"})
+    monkeypatch.delenv("LCM_CAPTURE_POSTGRES", raising=False)
+    config = cc.build_config({"cwd": "/whatever"})
     assert not config.database_dsn                                   # SQLite, not Postgres
-    assert config.db_path == cc.default_store_path("/Users/x/repos/widget")
+    assert config.resolved_db_path.endswith("/.lossless-agent/lcm.db")
+
+
+def test_build_config_postgres_optin(monkeypatch):
+    # LCM_CAPTURE_POSTGRES derives a per-project Postgres DSN (matches the launcher / kb_serve scheme).
+    monkeypatch.delenv("LCM_DATABASE_DSN", raising=False)
+    monkeypatch.delenv("LCM_DATABASE_PATH", raising=False)
+    monkeypatch.setenv("LCM_CAPTURE_POSTGRES", "1")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/x/repos/widget")
+    config = cc.build_config({"cwd": "/ignored"})
+    expected = f"postgresql://localhost:5432/{cc.project_db_name('/Users/x/repos/widget')}"
+    assert config.database_dsn == expected
 
 
 def test_build_config_uses_explicit_dsn(monkeypatch):

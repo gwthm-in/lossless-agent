@@ -12,10 +12,11 @@ store and builds the summary DAG — no agent tool-calls, no custom glue.
 
 Configuration is entirely via environment (see ``docs/configuration.md``)::
 
-    (default, no config)        per-project SQLite file under ~/.lossless-agent/stores/ — zero
-                                dependencies, no server. Works right after `pip install`.
-    LCM_DATABASE_DSN            opt into Postgres (unlocks the pgvector semantic layer)
-    LCM_DATABASE_PATH           explicit SQLite path (shared store)
+    (default, no config)        shared SQLite store at ~/.lossless-agent/lcm.db — the SAME store
+                                the MCP server defaults to, so recall sees captures. Zero deps.
+    LCM_DATABASE_DSN            explicit Postgres DSN (unlocks the pgvector semantic layer)
+    LCM_DATABASE_PATH           explicit SQLite path
+    LCM_CAPTURE_POSTGRES=1      per-project Postgres (lcm_<base>_<hash>); pair with a matching MCP
     LCM_SUMMARY_PROVIDER        anthropic (recommended: fast, no cold-start) | openai | (unset -> truncation)
     ANTHROPIC_API_KEY           required when LCM_SUMMARY_PROVIDER=anthropic
     LCM_SUMMARY_MODEL           e.g. claude-haiku-4-5-20251001
@@ -65,10 +66,8 @@ def project_db_name(root: str) -> str:
     return f"lcm_{base}_{h}"
 
 
-def default_store_path(root: str) -> str:
-    """Per-project SQLite file used when no store is explicitly configured — zero dependencies
-    (no server, no psycopg2), isolated per project by CLAUDE_PROJECT_DIR."""
-    return str(_STATE_DIR / "stores" / f"{project_db_name(root)}.db")
+def _truthy(v) -> bool:
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _project_root(payload: dict) -> str:
@@ -76,18 +75,25 @@ def _project_root(payload: dict) -> str:
 
 
 def build_config(payload: dict):
-    """Build the ``LCMConfig`` for this project's store, honouring the library's own backend
-    precedence so a plain ``pip install`` works out of the box:
+    """Build the ``LCMConfig`` for this project's store. Precedence is chosen so the hook and the
+    MCP recall server land on the *same* store out of the box:
 
-      * ``LCM_DATABASE_DSN`` set  -> Postgres (unlocks the pgvector semantic layer)
-      * ``LCM_DATABASE_PATH`` set -> SQLite at that path
-      * otherwise (default)       -> a per-project SQLite file under the state dir
+      * ``LCM_DATABASE_DSN`` / ``LCM_DATABASE_PATH`` set -> that explicit store (the MCP server
+        honours the same env now that its ``--db-path`` defaults to the env/config value).
+      * ``LCM_CAPTURE_POSTGRES`` truthy -> a per-project Postgres DSN ``lcm_<base>_<hash>``
+        (opt-in; pair it with an MCP server pointed at the same per-project DB).
+      * otherwise -> the library default SQLite store (``~/.lossless-agent/lcm.db``), which the
+        MCP server also defaults to — so recall sees captures with zero configuration.
     """
     from lossless_agent.config import LCMConfig
 
     config = LCMConfig.from_env()
-    if not config.database_dsn and not os.environ.get("LCM_DATABASE_PATH"):
-        config.db_path = default_store_path(_project_root(payload))
+    if config.database_dsn or os.environ.get("LCM_DATABASE_PATH"):
+        return config
+    if _truthy(os.environ.get("LCM_CAPTURE_POSTGRES")):
+        host = os.environ.get("LCM_PGHOST", "localhost")
+        port = os.environ.get("LCM_PGPORT", "5432")
+        config.database_dsn = f"postgresql://{host}:{port}/{project_db_name(_project_root(payload))}"
     return config
 
 

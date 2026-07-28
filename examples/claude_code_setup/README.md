@@ -20,18 +20,15 @@ Or create `.mcp.json` in your project root with:
 {
   "mcpServers": {
     "lossless-agent": {
-      "command": "lossless-agent-mcp",
-      "args": [
-        "--db-path",
-        "./data/lcm.db"
-      ]
+      "command": "lossless-agent-mcp"
     }
   }
 }
 ```
 
-That's it. Claude Code automatically discovers `.mcp.json` and connects to
-the MCP server.
+That's it. Claude Code automatically discovers `.mcp.json` and connects to the MCP server.
+With no `--db-path`, the server uses the default store (`~/.lossless-agent/lcm.db`) — the same
+one the capture hook writes to, so recall and capture share a store out of the box.
 
 ## Available Tools
 
@@ -73,17 +70,18 @@ Everything is configured via **environment variables** — no code:
 
 | Env var | Purpose |
 |---|---|
-| *(none)* | **Default:** a per-project **SQLite** store at `~/.lossless-agent/stores/lcm_<basename>_<hash>.db` — zero dependencies, no server. Works right after `pip install`. |
-| `LCM_DATABASE_DSN` | Opt into **Postgres** (unlocks the pgvector semantic layer): a full DSN, DB auto-created if missing. Requires `pip install 'lossless-agent[postgres]'` + a running Postgres. |
-| `LCM_DATABASE_PATH` | Explicit SQLite file path (shared store, not per-project). |
+| *(none)* | **Default:** a shared **SQLite** store at `~/.lossless-agent/lcm.db` — **the same store the MCP server defaults to**, so recall sees captures. Zero dependencies, works right after `pip install`. |
+| `LCM_DATABASE_DSN` | Use **Postgres** (unlocks the pgvector semantic layer): a full DSN, DB auto-created if missing. Requires `pip install 'lossless-agent[postgres]'`. The MCP server now honours this env too. |
+| `LCM_DATABASE_PATH` | Explicit SQLite file path — honoured by **both** hook and MCP server. |
+| `LCM_CAPTURE_POSTGRES=1` | Per-project Postgres store (`lcm_<basename>_<hash>`). Pair it with an MCP server pointed at the same per-project DB. |
 | `LCM_SUMMARY_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` | **Recommended** summarizer — a direct API call (fast, no CLI cold-start). Needs `pip install 'lossless-agent[anthropic]'`. Also `openai` (OpenAI/LiteLLM/Azure/Groq) via `lossless-agent[openai]`. Unset → deterministic truncation fallback. |
 | `LCM_SUMMARY_MODEL` | e.g. `claude-haiku-4-5-20251001`. |
 | `LCM_SUMMARIZE_COMMAND` | Alternative: an external `stdin → stdout` summarizer command. |
 | `LCM_LEAF_CHUNK_TOKENS`, `LCM_SUMMARY_TIMEOUT_MS`, … | Compaction tuning (honoured on the capture + ingest paths). |
 
-Point the MCP server (recall) at the **same** store so reads and writes share it — set the same
-`LCM_DATABASE_PATH` / `LCM_DATABASE_DSN` for both, or give `lossless-agent-mcp` the matching
-`--db-path` (SQLite) or `--db-dsn` (Postgres).
+Hook and MCP server **share a store by default** (`~/.lossless-agent/lcm.db`). To move it, set
+`LCM_DATABASE_PATH` or `LCM_DATABASE_DSN` once — both sides read it (the MCP server falls back to
+the env when `--db-path` isn't given). An explicit `--db-path`/`--db-dsn` still overrides.
 
 This is the seamless path: `pip install lossless-agent` → register the hook → set env. The
 capture runs through the generic adapter's own `on_turn_end` / `on_session_end` lifecycle, so
