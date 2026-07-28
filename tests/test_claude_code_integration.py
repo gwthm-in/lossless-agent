@@ -7,23 +7,42 @@ from lossless_agent.integrations import claude_code as cc
 def test_project_db_name_is_deterministic_and_slugged():
     a = cc.project_db_name("/Users/x/Documents/repos/My-Project")
     b = cc.project_db_name("/Users/x/Documents/repos/My-Project")
-    assert a == b                       # deterministic
-    assert a.startswith("lcm_my_project_")   # basename lower-cased + slugged
+    assert a == b                             # deterministic
+    assert a.startswith("lcm_my_project_")    # basename lower-cased + slugged
     assert len(a.rsplit("_", 1)[-1]) == 8     # 8-hex path suffix
     # different paths with the same basename must not collide
     assert cc.project_db_name("/a/My-Project") != cc.project_db_name("/b/My-Project")
 
 
-def test_resolve_dsn_prefers_explicit_env(monkeypatch):
-    monkeypatch.setenv("LCM_DATABASE_DSN", "postgresql://localhost:5432/explicit_store")
-    assert cc.resolve_dsn({"cwd": "/whatever"}) == "postgresql://localhost:5432/explicit_store"
+def test_default_store_path_is_per_project_sqlite():
+    p = cc.default_store_path("/Users/x/repos/widget")
+    assert p.endswith(".db")
+    assert "/stores/" in p
+    assert cc.project_db_name("/Users/x/repos/widget") in p
 
 
-def test_resolve_dsn_derives_from_project_dir(monkeypatch):
+def test_build_config_default_is_sqlite_no_server(monkeypatch):
+    # The documented "seamless" path (no env) must NOT require Postgres.
     monkeypatch.delenv("LCM_DATABASE_DSN", raising=False)
+    monkeypatch.delenv("LCM_DATABASE_PATH", raising=False)
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/Users/x/repos/widget")
-    dsn = cc.resolve_dsn({"cwd": "/ignored/when/project/dir/set"})
-    assert dsn == f"postgresql://localhost:5432/{cc.project_db_name('/Users/x/repos/widget')}"
+    config = cc.build_config({"cwd": "/ignored/when/project/dir/set"})
+    assert not config.database_dsn                                   # SQLite, not Postgres
+    assert config.db_path == cc.default_store_path("/Users/x/repos/widget")
+
+
+def test_build_config_uses_explicit_dsn(monkeypatch):
+    monkeypatch.setenv("LCM_DATABASE_DSN", "postgresql://localhost:5432/explicit_store")
+    config = cc.build_config({"cwd": "/whatever"})
+    assert config.database_dsn == "postgresql://localhost:5432/explicit_store"
+
+
+def test_build_config_respects_explicit_sqlite_path(monkeypatch):
+    monkeypatch.delenv("LCM_DATABASE_DSN", raising=False)
+    monkeypatch.setenv("LCM_DATABASE_PATH", "/tmp/custom-lcm.db")
+    config = cc.build_config({"cwd": "/whatever"})
+    assert not config.database_dsn
+    assert config.resolved_db_path == "/tmp/custom-lcm.db"
 
 
 def test_parse_transcript_extracts_user_and_assistant_text(tmp_path):
@@ -44,7 +63,7 @@ def test_parse_transcript_extracts_user_and_assistant_text(tmp_path):
     ]
 
 
-def test_guard_env_short_circuits(monkeypatch, capsys):
+def test_guard_env_short_circuits(monkeypatch):
     # When a summarizer's own subprocess triggers the hook, LCM_SUMMARIZING makes it a no-op.
     monkeypatch.setenv("LCM_SUMMARIZING", "1")
     assert cc.main([]) == 0

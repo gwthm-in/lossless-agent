@@ -12,7 +12,10 @@ store and builds the summary DAG — no agent tool-calls, no custom glue.
 
 Configuration is entirely via environment (see ``docs/configuration.md``)::
 
-    LCM_DATABASE_DSN            explicit store DSN; else derived per-project from CLAUDE_PROJECT_DIR
+    (default, no config)        per-project SQLite file under ~/.lossless-agent/stores/ — zero
+                                dependencies, no server. Works right after `pip install`.
+    LCM_DATABASE_DSN            opt into Postgres (unlocks the pgvector semantic layer)
+    LCM_DATABASE_PATH           explicit SQLite path (shared store)
     LCM_SUMMARY_PROVIDER        anthropic (recommended: fast, no cold-start) | openai | (unset -> truncation)
     ANTHROPIC_API_KEY           required when LCM_SUMMARY_PROVIDER=anthropic
     LCM_SUMMARY_MODEL           e.g. claude-haiku-4-5-20251001
@@ -54,30 +57,49 @@ def _log(msg: str) -> None:
 
 
 def project_db_name(root: str) -> str:
-    """Deterministic per-project database name: ``lcm_<basename>_<8 hex of sha256(path)>``.
+    """Deterministic per-project store name: ``lcm_<basename>_<8 hex of sha256(path)>``.
     The basename stays human-readable; the path hash prevents same-name collisions."""
     base = re.sub(r"[^a-z0-9]", "_", os.path.basename(root.rstrip("/")).lower()) or "root"
     h = hashlib.sha256(root.encode("utf-8")).hexdigest()[:8]
     return f"lcm_{base}_{h}"
 
 
-def resolve_dsn(payload: dict) -> str:
-    """Explicit ``LCM_DATABASE_DSN`` wins; otherwise derive a per-project Postgres DSN from
-    the project root (``CLAUDE_PROJECT_DIR``, the reliable root Claude Code injects)."""
-    dsn = os.environ.get("LCM_DATABASE_DSN")
-    if dsn:
-        return dsn
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    host = os.environ.get("LCM_PGHOST", "localhost")
-    port = os.environ.get("LCM_PGPORT", "5432")
-    return f"postgresql://{host}:{port}/{project_db_name(root)}"
+def default_store_path(root: str) -> str:
+    """Per-project SQLite file used when no store is explicitly configured — zero dependencies
+    (no server, no psycopg2), isolated per project by CLAUDE_PROJECT_DIR."""
+    return str(_STATE_DIR / "stores" / f"{project_db_name(root)}.db")
+
+
+def _project_root(payload: dict) -> str:
+    return os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
+
+
+def build_config(payload: dict):
+    """Build the ``LCMConfig`` for this project's store, honouring the library's own backend
+    precedence so a plain ``pip install`` works out of the box:
+
+      * ``LCM_DATABASE_DSN`` set  -> Postgres (unlocks the pgvector semantic layer)
+      * ``LCM_DATABASE_PATH`` set -> SQLite at that path
+      * otherwise (default)       -> a per-project SQLite file under the state dir
+    """
+    from lossless_agent.config import LCMConfig
+
+    config = LCMConfig.from_env()
+    if not config.database_dsn and not os.environ.get("LCM_DATABASE_PATH"):
+        config.db_path = default_store_path(_project_root(payload))
+    return config
+
+
+def _store_label(config) -> str:
+    """Short, stable identifier for this store (for cursor filenames + logs)."""
+    if config.database_dsn:
+        return config.database_dsn.rsplit("/", 1)[-1]
+    return os.path.splitext(os.path.basename(config.resolved_db_path))[0]
 
 
 def ensure_database(dsn: str) -> bool:
-    """Create the (empty) database if missing — lossless builds its own tables + pgvector on
-    first connect. No-op for non-Postgres DSNs. Returns True if the store is usable."""
-    if not dsn.startswith("postgres"):
-        return True
+    """Create the (empty) Postgres database if missing — lossless builds its own tables +
+    pgvector on first connect. Returns True if the store is usable."""
     try:
         import psycopg2
         from psycopg2 import sql
@@ -96,6 +118,19 @@ def ensure_database(dsn: str) -> bool:
         return True
     except Exception as e:
         _log(f"ensure_database failed: {e}")
+        return False
+
+
+def prepare_store(config) -> bool:
+    """Ensure the store exists. Postgres: create the DB if missing. SQLite: create the parent
+    directory (the library creates the file + schema on first connect)."""
+    if config.database_dsn:
+        return ensure_database(config.database_dsn)
+    try:
+        os.makedirs(os.path.dirname(config.resolved_db_path), exist_ok=True)
+        return True
+    except Exception as e:
+        _log(f"prepare_store (sqlite) failed: {e}")
         return False
 
 
@@ -137,19 +172,16 @@ def parse_transcript(path: str) -> list[dict]:
     return out
 
 
-def _cursor_path(session_key: str, dbname: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{dbname}.{session_key}")
+def _cursor_path(session_key: str, store_label: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{store_label}.{session_key}")
     return _CURSOR_DIR / f"{safe}.txt"
 
 
-async def _capture(dsn: str, session_key: str, messages: list[dict], final: bool) -> dict:
-    """Drive the generic adapter's own lifecycle — this is the single, canonical capture path."""
-    os.environ["LCM_DATABASE_DSN"] = dsn
-    from lossless_agent.config import LCMConfig
+async def _capture(config, session_key: str, messages: list[dict], final: bool) -> None:
+    """Drive the generic adapter's own lifecycle — the single, canonical capture path."""
     from lossless_agent.adapters.factory import create_adapter
     from lossless_agent.summarizers import build_summarize_fn
 
-    config = LCMConfig.from_env()
     summarize_fn = build_summarize_fn(config, os.environ.get("LCM_SUMMARIZE_COMMAND"))
     adapter = create_adapter("generic", config, summarize_fn)
     try:
@@ -158,20 +190,19 @@ async def _capture(dsn: str, session_key: str, messages: list[dict], final: bool
         if final:
             await adapter.on_session_end(session_key)
     finally:
-        closer = getattr(adapter, "aclose", None)
-        if closer is not None:
+        aclose = getattr(adapter, "aclose", None)
+        if aclose is not None:
             try:
-                await closer()
+                await aclose()
             except Exception:
                 pass
         else:
-            closer = getattr(adapter, "close", None)
-            if callable(closer):
+            close = getattr(adapter, "close", None)
+            if callable(close):
                 try:
-                    closer()
+                    close()
                 except Exception:
                     pass
-    return {"ingested": len(messages), "final": final}
 
 
 def main(argv=None) -> int:
@@ -192,8 +223,8 @@ def main(argv=None) -> int:
         payload = {}
 
     session_key = payload.get("session_id") or payload.get("session_key") or "default"
-    dsn = resolve_dsn(payload)
-    dbname = dsn.rsplit("/", 1)[-1]
+    config = build_config(payload)
+    label = _store_label(config)
 
     # Cursor dedup: the transcript grows every turn, so ingest only messages past the cursor.
     messages: list[dict] = []
@@ -201,7 +232,7 @@ def main(argv=None) -> int:
     transcript_path = payload.get("transcript_path")
     if transcript_path and os.path.exists(transcript_path):
         all_msgs = parse_transcript(transcript_path)
-        cursor_file = _cursor_path(session_key, dbname)
+        cursor_file = _cursor_path(session_key, label)
         try:
             cursor = int(cursor_file.read_text().strip() or "0")
         except Exception:
@@ -210,11 +241,11 @@ def main(argv=None) -> int:
 
     if not messages and not args.final:
         return 0
-    if not ensure_database(dsn):
+    if not prepare_store(config):
         return 0
 
     try:
-        asyncio.run(_capture(dsn, session_key, messages, args.final))
+        asyncio.run(_capture(config, session_key, messages, args.final))
     except Exception as e:
         _log(f"capture failed (non-fatal, cursor not advanced): {e}")
         return 0
@@ -222,12 +253,12 @@ def main(argv=None) -> int:
     if messages:
         try:
             _CURSOR_DIR.mkdir(parents=True, exist_ok=True)
-            _cursor_path(session_key, dbname).write_text(str(cursor + len(messages)))
+            _cursor_path(session_key, label).write_text(str(cursor + len(messages)))
         except Exception:
             pass
-        _log(f"ingested {len(messages)} message(s) -> {dbname} (session {session_key[:8]})")
+        _log(f"ingested {len(messages)} message(s) -> {label} (session {session_key[:8]})")
     if args.final:
-        _log(f"final compaction sweep -> {dbname} (session {session_key[:8]})")
+        _log(f"final compaction sweep -> {label} (session {session_key[:8]})")
     return 0
 
 
