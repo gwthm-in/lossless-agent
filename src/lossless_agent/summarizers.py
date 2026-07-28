@@ -48,21 +48,31 @@ def make_openai_summarizer(model: str, base_url: str = "") -> SummarizeFn:
 
 
 def make_anthropic_summarizer(model: str) -> SummarizeFn:
-    """Summarizer that calls the Anthropic Messages API directly.
+    """Summarizer that calls the Anthropic Messages API directly (low-latency: one HTTPS call,
+    no CLI cold-start). Requires the ``anthropic`` package (``pip install
+    'lossless-agent[anthropic]'``). Auth, first match:
 
-    Requires ANTHROPIC_API_KEY in the environment and the ``anthropic`` package
-    (``pip install anthropic``). This is the low-latency path — a single HTTPS call, no CLI
-    cold-start — and is the recommended backend for the Claude Code capture hook.
+      * ``CLAUDE_CODE_OAUTH_TOKEN`` (a Claude Code subscription token, ``sk-ant-oat…``) — sent as
+        a Bearer token with the Claude Code OAuth beta header. Bills the subscription, no API key.
+      * ``ANTHROPIC_API_KEY`` — standard ``x-api-key`` auth.
     """
     try:
         import anthropic as _anthropic
     except ImportError:
         raise ImportError(
             "LCM_SUMMARY_PROVIDER=anthropic requires the anthropic package. "
-            "Install with: pip install anthropic"
+            "Install with: pip install 'lossless-agent[anthropic]'"
         )
     _model = model or "claude-haiku-4-5-20251001"
-    client = _anthropic.AsyncAnthropic()
+    _oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if _oauth:
+        beta = os.environ.get("LCM_ANTHROPIC_OAUTH_BETA", "oauth-2025-04-20")
+        client = _anthropic.AsyncAnthropic(
+            auth_token=_oauth,
+            default_headers={"anthropic-beta": beta},
+        )
+    else:
+        client = _anthropic.AsyncAnthropic()
 
     async def summarize(prompt: str) -> str:
         message = await client.messages.create(
