@@ -89,3 +89,19 @@ def test_ensure_database_prefers_target_over_admin(monkeypatch):
 
     assert cc.ensure_database("postgresql://user@host:5432/mydb") is True
     assert calls == ["postgresql://user@host:5432/mydb"]   # target only; never /postgres
+
+
+def test_pg_target_strips_query_from_dbname():
+    # A query-bearing DSN must not leak options into the created DB name or the admin path.
+    dbname, admin = cc._pg_target("postgresql://user:pw@host:5432/lcm?sslmode=require")
+    assert dbname == "lcm"
+    assert admin == "postgresql://user:pw@host:5432/postgres?sslmode=require"
+
+
+def test_prepare_store_sqlite_bare_filename():
+    # A bare filename SQLite path has no parent dir; prepare_store must not crash on makedirs("").
+    class _Cfg:
+        database_dsn = ""
+        resolved_db_path = "lcm.db"
+
+    assert cc.prepare_store(_Cfg()) is True

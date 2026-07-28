@@ -37,6 +37,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 _STATE_DIR = Path(os.environ.get("LCM_CAPTURE_STATE_DIR", str(Path.home() / ".lossless-agent")))
 _CURSOR_DIR = _STATE_DIR / "capture-cursors"
@@ -93,8 +94,18 @@ def build_config(payload: dict):
 def _store_label(config) -> str:
     """Short, stable identifier for this store (for cursor filenames + logs)."""
     if config.database_dsn:
-        return config.database_dsn.rsplit("/", 1)[-1]
+        return urlsplit(config.database_dsn).path.lstrip("/") or "lcm"
     return os.path.splitext(os.path.basename(config.resolved_db_path))[0]
+
+
+def _pg_target(dsn: str):
+    """Return ``(dbname, admin_dsn)`` for a Postgres DSN, parsing the URL so query options
+    (e.g. ``?sslmode=require``) land on neither the database name nor the admin path.
+    ``postgresql://u@h/lcm?sslmode=require`` -> ``("lcm", "postgresql://u@h/postgres?sslmode=require")``."""
+    parts = urlsplit(dsn)
+    dbname = parts.path.lstrip("/")
+    admin = urlunsplit((parts.scheme, parts.netloc, "/postgres", parts.query, parts.fragment))
+    return dbname, admin
 
 
 def ensure_database(dsn: str) -> bool:
@@ -119,8 +130,7 @@ def ensure_database(dsn: str) -> bool:
     # 2) Target unreachable (typically: does not exist yet) — try to create it via admin.
     try:
         from psycopg2 import sql
-        dbname = dsn.rsplit("/", 1)[-1]
-        admin = dsn.rsplit("/", 1)[0] + "/postgres"
+        dbname, admin = _pg_target(dsn)          # 'lcm', not 'lcm?sslmode=…'
         conn = psycopg2.connect(admin, connect_timeout=4)
         conn.autocommit = True
         try:
@@ -143,7 +153,9 @@ def prepare_store(config) -> bool:
     if config.database_dsn:
         return ensure_database(config.database_dsn)
     try:
-        os.makedirs(os.path.dirname(config.resolved_db_path), exist_ok=True)
+        parent = os.path.dirname(config.resolved_db_path)
+        if parent:                               # a bare filename has no parent dir
+            os.makedirs(parent, exist_ok=True)
         return True
     except Exception as e:
         _log(f"prepare_store (sqlite) failed: {e}")
