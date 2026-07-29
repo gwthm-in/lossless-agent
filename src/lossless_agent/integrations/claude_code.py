@@ -17,6 +17,9 @@ Configuration is entirely via environment (see ``docs/configuration.md``)::
     LCM_DATABASE_DSN            explicit Postgres DSN (unlocks the pgvector semantic layer)
     LCM_DATABASE_PATH           explicit SQLite path
     LCM_CAPTURE_POSTGRES=1      per-project Postgres (lcm_<base>_<hash>); pair with a matching MCP
+    LCM_CAPTURE_ASYNC=1         non-blocking capture: fork a detached worker and return in ms so
+                                summarization never blocks the turn / SessionEnd (workers serialize
+                                per-conversation via a flock, so per-turn firing can't double-ingest)
     LCM_SUMMARY_PROVIDER        anthropic (recommended: fast, no cold-start) | openai | (unset -> truncation)
     ANTHROPIC_API_KEY           required when LCM_SUMMARY_PROVIDER=anthropic
     LCM_SUMMARY_MODEL           e.g. claude-haiku-4-5-20251001
@@ -31,14 +34,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import datetime
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+
+try:
+    import fcntl  # POSIX only; used to serialize concurrent async-capture workers
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
 
 _STATE_DIR = Path(os.environ.get("LCM_CAPTURE_STATE_DIR", str(Path.home() / ".lossless-agent")))
 _CURSOR_DIR = _STATE_DIR / "capture-cursors"
@@ -238,6 +249,57 @@ def _cursor_path(session_key: str, store_label: str) -> Path:
     return _CURSOR_DIR / f"{safe}.txt"
 
 
+def _lock_path(session_key: str, store_label: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{store_label}.{session_key}")
+    return _CURSOR_DIR / f"{safe}.lock"
+
+
+@contextlib.contextmanager
+def _capture_lock(session_key: str, store_label: str):
+    """Serialize capture for one conversation. Async mode fires a detached worker per turn, so two
+    workers can race the read-cursor → ingest → advance-cursor section on the same store and
+    double-ingest or corrupt the summary DAG. An exclusive per-(store, session) flock makes the
+    later worker wait, then read the advanced cursor and process only genuinely-new messages.
+    A no-op where fcntl is unavailable (single-invocation sync capture doesn't need it)."""
+    if fcntl is None:
+        yield
+        return
+    _CURSOR_DIR.mkdir(parents=True, exist_ok=True)
+    lock = _lock_path(session_key, store_label)
+    f = open(lock, "w")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        f.close()
+
+
+def _async_enabled() -> bool:
+    return _truthy(os.environ.get("LCM_CAPTURE_ASYNC"))
+
+
+def _spawn_detached(payload: dict, final: bool) -> None:
+    """Fork a detached worker that does the slow capture out of band, then return at once — so the
+    hook never blocks session teardown (the cause of 'Hook cancelled' on the synchronous path).
+    Re-invokes this module in --worker mode (self-contained; no dependency on the console script
+    being on PATH), matching the SessionEnd-digest hook's pattern."""
+    fd, tmp = tempfile.mkstemp(prefix="lcm_capture_", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+    argv = [sys.executable, os.path.abspath(__file__), "--worker", tmp]
+    if final:
+        argv.append("--final")
+    devnull = open(os.devnull, "wb")
+    subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=devnull, stderr=devnull,
+        start_new_session=True, close_fds=True,
+    )
+
+
 async def _capture(config, session_key: str, messages: list[dict], final: bool) -> None:
     """Drive the generic adapter's own lifecycle — the single, canonical capture path."""
     from lossless_agent.adapters.factory import create_adapter
@@ -266,6 +328,53 @@ async def _capture(config, session_key: str, messages: list[dict], final: bool) 
                     pass
 
 
+def _do_capture(payload: dict, final: bool) -> int:
+    """Read new messages past the cursor, ingest + compact them, then advance the cursor — all
+    under an exclusive per-conversation lock so concurrent async workers can't race. Runs inline
+    (sync mode) or inside the detached worker (async mode)."""
+    session_key = payload.get("session_id") or payload.get("session_key") or "default"
+    config = build_config(payload)
+    label = _store_label(config)
+
+    with _capture_lock(session_key, label):
+        # Cursor dedup: the transcript grows every turn, so ingest only messages past the cursor.
+        # Reading the cursor *inside* the lock is what makes async safe — a queued worker sees the
+        # previous worker's advanced cursor and never reprocesses the same messages.
+        messages: list[dict] = []
+        cursor = 0
+        transcript_path = payload.get("transcript_path")
+        if transcript_path and os.path.exists(transcript_path):
+            all_msgs = parse_transcript(transcript_path)
+            cursor_file = _cursor_path(session_key, label)
+            try:
+                cursor = int(cursor_file.read_text().strip() or "0")
+            except Exception:
+                cursor = 0
+            messages = all_msgs[cursor:]
+
+        if not messages and not final:
+            return 0
+        if not prepare_store(config):
+            return 0
+
+        try:
+            asyncio.run(_capture(config, session_key, messages, final))
+        except Exception as e:
+            _log(f"capture failed (non-fatal, cursor not advanced): {e}")
+            return 0
+
+        if messages:
+            try:
+                _CURSOR_DIR.mkdir(parents=True, exist_ok=True)
+                _cursor_path(session_key, label).write_text(str(cursor + len(messages)))
+            except Exception:
+                pass
+            _log(f"ingested {len(messages)} message(s) -> {label} (session {session_key[:8]})")
+        if final:
+            _log(f"final compaction sweep -> {label} (session {session_key[:8]})")
+    return 0
+
+
 def main(argv=None) -> int:
     # A summarizer's own headless session inherits this hook; bail so it isn't captured.
     if os.environ.get(_GUARD_ENV):
@@ -274,7 +383,24 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="lossless-agent-capture", description=__doc__)
     ap.add_argument("--final", action="store_true",
                     help="run the end-of-session compaction sweep (register on SessionEnd)")
+    ap.add_argument("--worker", metavar="PAYLOAD_JSON",
+                    help=argparse.SUPPRESS)  # internal: run the detached async-capture worker
     args = ap.parse_args(argv)
+
+    # Worker mode (async): payload was handed off via a temp file by _spawn_detached.
+    if args.worker:
+        try:
+            with open(args.worker, encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            return 0
+        try:
+            return _do_capture(payload if isinstance(payload, dict) else {}, args.final)
+        finally:
+            try:
+                os.unlink(args.worker)
+            except OSError:
+                pass
 
     try:
         payload = json.load(sys.stdin) if not sys.stdin.isatty() else {}
@@ -283,44 +409,16 @@ def main(argv=None) -> int:
     if not isinstance(payload, dict):
         payload = {}
 
-    session_key = payload.get("session_id") or payload.get("session_key") or "default"
-    config = build_config(payload)
-    label = _store_label(config)
-
-    # Cursor dedup: the transcript grows every turn, so ingest only messages past the cursor.
-    messages: list[dict] = []
-    cursor = 0
-    transcript_path = payload.get("transcript_path")
-    if transcript_path and os.path.exists(transcript_path):
-        all_msgs = parse_transcript(transcript_path)
-        cursor_file = _cursor_path(session_key, label)
+    # Async mode: fork a detached worker and return in milliseconds so the hook never blocks
+    # (summarization can take up to LCM_SUMMARY_TIMEOUT_MS). Fall back to inline if the fork fails.
+    if _async_enabled():
         try:
-            cursor = int(cursor_file.read_text().strip() or "0")
-        except Exception:
-            cursor = 0
-        messages = all_msgs[cursor:]
+            _spawn_detached(payload, args.final)
+            return 0
+        except Exception as e:
+            _log(f"async spawn failed ({e}); running capture inline")
 
-    if not messages and not args.final:
-        return 0
-    if not prepare_store(config):
-        return 0
-
-    try:
-        asyncio.run(_capture(config, session_key, messages, args.final))
-    except Exception as e:
-        _log(f"capture failed (non-fatal, cursor not advanced): {e}")
-        return 0
-
-    if messages:
-        try:
-            _CURSOR_DIR.mkdir(parents=True, exist_ok=True)
-            _cursor_path(session_key, label).write_text(str(cursor + len(messages)))
-        except Exception:
-            pass
-        _log(f"ingested {len(messages)} message(s) -> {label} (session {session_key[:8]})")
-    if args.final:
-        _log(f"final compaction sweep -> {label} (session {session_key[:8]})")
-    return 0
+    return _do_capture(payload, args.final)
 
 
 def cli() -> None:

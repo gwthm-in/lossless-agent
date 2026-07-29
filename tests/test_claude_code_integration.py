@@ -1,5 +1,6 @@
 """Unit tests for the Claude Code capture integration (no database required)."""
 import json
+import os
 
 from lossless_agent.integrations import claude_code as cc
 
@@ -112,6 +113,57 @@ def test_prepare_store_sqlite_bare_filename():
         resolved_db_path = "lcm.db"
 
     assert cc.prepare_store(_Cfg()) is True
+
+
+def _fake_stdin(obj):
+    import io
+    s = io.StringIO(json.dumps(obj))
+    s.isatty = lambda: False
+    return s
+
+
+def test_async_mode_forks_detached_worker_and_returns(monkeypatch):
+    # With LCM_CAPTURE_ASYNC on, main() must fork a --worker child and return WITHOUT capturing inline.
+    monkeypatch.setenv("LCM_CAPTURE_ASYNC", "1")
+    monkeypatch.setattr(cc.sys, "stdin", _fake_stdin({"session_id": "s1", "transcript_path": "/nope"}))
+
+    def _boom(*a, **k):
+        raise AssertionError("_do_capture ran inline in async mode")
+    monkeypatch.setattr(cc, "_do_capture", _boom)
+
+    calls = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kw):
+            calls["argv"] = argv
+    monkeypatch.setattr(cc.subprocess, "Popen", _FakePopen)
+
+    assert cc.main([]) == 0
+    assert "--worker" in calls["argv"]                 # forked the worker
+    tmp = calls["argv"][calls["argv"].index("--worker") + 1]
+    os.unlink(tmp)                                      # clean up the handed-off payload file
+
+
+def test_worker_mode_captures_then_unlinks_payload(monkeypatch, tmp_path):
+    p = tmp_path / "payload.json"
+    p.write_text(json.dumps({"session_id": "s2"}))
+    seen = {}
+    monkeypatch.setattr(cc, "_do_capture", lambda pl, final: (seen.update(pl=pl, final=final), 0)[1])
+    assert cc.main(["--worker", str(p), "--final"]) == 0
+    assert seen["pl"] == {"session_id": "s2"} and seen["final"] is True
+    assert not p.exists()                              # temp payload cleaned up
+
+
+def test_sync_mode_runs_inline_without_forking(monkeypatch):
+    monkeypatch.delenv("LCM_CAPTURE_ASYNC", raising=False)
+    monkeypatch.setattr(cc.sys, "stdin", _fake_stdin({"session_id": "s3"}))
+    seen = {}
+    monkeypatch.setattr(cc, "_do_capture", lambda pl, final: (seen.update(ran=True), 0)[1])
+
+    def _no_fork(*a, **k):
+        raise AssertionError("forked a worker in sync mode")
+    monkeypatch.setattr(cc.subprocess, "Popen", _no_fork)
+    assert cc.main([]) == 0 and seen.get("ran")
 
 
 def test_parse_transcript_drops_injected_content(tmp_path):
