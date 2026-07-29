@@ -76,7 +76,14 @@ class VectorStore:
             row = cur.fetchone()
             have = row[0] if row else None
             if have is None or have <= 0 or have == want_dim:
+                self._conn.rollback()  # release the read txn; nothing to change
                 return
+            # Serialize against a concurrent writer: take an exclusive lock (NOWAIT so we never
+            # block startup) and re-count emptiness inside the SAME transaction as the DROP, so a
+            # row committed between the count and the DROP can't be silently destroyed. If the
+            # lock can't be taken, the except-branch rolls back and we fall through to the
+            # non-destructive CREATE-IF-NOT-EXISTS path.
+            cur.execute(f"LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE NOWAIT")
             cur.execute(f"SELECT count(*) FROM {table}")
             n = int(cur.fetchone()[0])
             if n == 0:
@@ -87,6 +94,7 @@ class VectorStore:
                     table, have, want_dim,
                 )
             else:
+                self._conn.rollback()  # release the lock; never destroy populated data
                 logger.warning(
                     "%s has embedding dim %s but this build expects %s and it holds %d "
                     "rows — leaving it; new inserts will fail until migrated manually.",

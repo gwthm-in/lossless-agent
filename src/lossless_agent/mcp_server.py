@@ -67,6 +67,10 @@ _config: Optional[LCMConfig] = None
 _vector_store: Optional[VectorStore] = None
 _raw_embed_fn: Optional[EmbedFn] = None
 _raw_batch_embed_fn: Optional[BatchEmbedFn] = None
+# True only when the raw fastembed embedder matches the summary_embeddings width, i.e. the raw
+# path owns the summary table. Guards summary vector search from firing a dimension-mismatched
+# query in an API-embedder config (where the API path owns the table at embedding_dim).
+_summary_vector_ok: bool = False
 
 
 def _serialize(obj: Any) -> Any:
@@ -349,10 +353,19 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             limit=limit,
         )
 
-        # Vector search (if raw vector retrieval is enabled)
-        if _vector_store and _raw_embed_fn and scope in ("all", "messages"):
+        # Raw-vector query embedding — computed once, shared by message + summary search
+        # (avoids embedding the query twice on scope="all").
+        query_embedding = None
+        want_summary_vec = _summary_vector_ok and scope in ("all", "summaries")
+        if _vector_store and _raw_embed_fn and (scope in ("all", "messages") or want_summary_vec):
             try:
                 query_embedding = await _raw_embed_fn(query)
+            except Exception as exc:
+                logger.warning("Raw-vector query embedding failed: %s", exc)
+
+        # Vector search over messages
+        if query_embedding is not None and scope in ("all", "messages"):
+            try:
                 conv_ids = [conversation_id] if conversation_id else None
                 vec_hits = _vector_store.search_messages(
                     query_embedding,
@@ -410,12 +423,13 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         # Summary-level vector search — the reader that makes embedded summaries
         # actually queryable. Without this, summary_embeddings is write-only in the
         # raw-only config. Appends vector-only summary hits not already surfaced by FTS.
-        if _vector_store and _raw_embed_fn and scope in ("all", "summaries"):
+        # Gated on _summary_vector_ok so it never fires a dimension-mismatched query in
+        # an API-embedder config (where the API path owns the table at embedding_dim).
+        if query_embedding is not None and want_summary_vec:
             try:
-                sq_embedding = await _raw_embed_fn(query)
                 conv_ids = [conversation_id] if conversation_id else None
                 sum_hits = _vector_store.search_summaries(
-                    sq_embedding,
+                    query_embedding,
                     top_k=_config.raw_vector_top_k if _config else 20,
                     conversation_ids=conv_ids,
                     min_score=_config.raw_vector_min_score if _config else 0.35,
@@ -442,7 +456,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                                 created_at=row[5],
                             ))
                     if appended:
-                        fts_results = flat + appended[: max(0, limit)]
+                        # Respect the caller's limit: FTS already returned up to `limit`.
+                        fts_results = flat + appended[: max(0, limit - len(flat))]
             except Exception as exc:
                 logger.warning("Summary vector search failed: %s", exc)
 
@@ -793,7 +808,7 @@ async def _handle_backfill(arguments: dict) -> list[types.TextContent]:
 # ------------------------------------------------------------------
 
 async def main(db_path: str, db_dsn: str = "") -> None:
-    global _db, _config, _vector_store, _raw_embed_fn, _raw_batch_embed_fn
+    global _db, _config, _vector_store, _raw_embed_fn, _raw_batch_embed_fn, _summary_vector_ok
     # Start from env vars, then apply CLI overrides on top
     cfg = LCMConfig.from_env()
     overrides: dict = {}
@@ -815,6 +830,10 @@ async def main(db_path: str, db_dsn: str = "") -> None:
             # summary insert would fail silently — the exact bug the dim gating fixes.
             from lossless_agent.engine.embedder import make_embedder
             _summary_dim = cfg.embedding_dim if make_embedder(cfg) is not None else cfg.raw_vector_dim
+            # Summary vector search only makes sense when the raw embedder's width matches the
+            # summary table — otherwise its queries would dimension-mismatch. True in the raw-only
+            # config (the one that also writes summary embeddings).
+            _summary_vector_ok = _summary_dim == cfg.raw_vector_dim
             _vector_store = VectorStore(
                 dsn=cfg.database_dsn,
                 dim=_summary_dim,
