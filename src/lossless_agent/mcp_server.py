@@ -407,6 +407,45 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             except Exception as exc:
                 logger.warning("Vector search failed, using FTS only: %s", exc)
 
+        # Summary-level vector search — the reader that makes embedded summaries
+        # actually queryable. Without this, summary_embeddings is write-only in the
+        # raw-only config. Appends vector-only summary hits not already surfaced by FTS.
+        if _vector_store and _raw_embed_fn and scope in ("all", "summaries"):
+            try:
+                sq_embedding = await _raw_embed_fn(query)
+                conv_ids = [conversation_id] if conversation_id else None
+                sum_hits = _vector_store.search_summaries(
+                    sq_embedding,
+                    top_k=_config.raw_vector_top_k if _config else 20,
+                    conversation_ids=conv_ids,
+                    min_score=_config.raw_vector_min_score if _config else 0.35,
+                )
+                if sum_hits:
+                    flat = cast(List[GrepResult], fts_results)
+                    existing_sum = {str(r.id) for r in flat if r.type == "summary"}
+                    appended = []
+                    for sid, _sim in sum_hits:
+                        if sid in existing_sum:
+                            continue
+                        row = _db.conn.execute(
+                            "SELECT summary_id, conversation_id, content, kind, depth, created_at "
+                            "FROM summaries WHERE summary_id = ?",
+                            (sid,),
+                        ).fetchone()
+                        if row:
+                            appended.append(GrepResult(
+                                type="summary",
+                                id=row[0],
+                                content_snippet=_truncate(row[2]),
+                                conversation_id=row[1],
+                                metadata={"kind": row[3], "depth": row[4], "source": "vector"},
+                                created_at=row[5],
+                            ))
+                    if appended:
+                        fts_results = flat + appended[: max(0, limit)]
+            except Exception as exc:
+                logger.warning("Summary vector search failed: %s", exc)
+
         payload = [_serialize(r) for r in fts_results]  # type: ignore[union-attr]
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
@@ -770,9 +809,15 @@ async def main(db_path: str, db_dsn: str = "") -> None:
     # Initialize raw vector retrieval if configured
     if cfg.raw_vector_enabled and cfg.database_dsn:
         try:
+            # Own summary_embeddings at the SAME width the capture side does (base_impl):
+            # embedding_dim when an API embedder owns the table, else the raw fastembed dim.
+            # Otherwise this store would (re)create the table at 1536 and every 1024-dim raw
+            # summary insert would fail silently — the exact bug the dim gating fixes.
+            from lossless_agent.engine.embedder import make_embedder
+            _summary_dim = cfg.embedding_dim if make_embedder(cfg) is not None else cfg.raw_vector_dim
             _vector_store = VectorStore(
                 dsn=cfg.database_dsn,
-                dim=cfg.embedding_dim,
+                dim=_summary_dim,
                 msg_dim=cfg.raw_vector_dim,
             )
             _raw_embed_fn = make_raw_vector_embedder(cfg)
