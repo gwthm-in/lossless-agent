@@ -166,6 +166,34 @@ def test_sync_mode_runs_inline_without_forking(monkeypatch):
     assert cc.main([]) == 0 and seen.get("ran")
 
 
+def test_async_without_flock_runs_inline_not_forked(monkeypatch):
+    # No fcntl (non-POSIX): detaching would run workers unserialized, so async must fall back inline.
+    monkeypatch.setenv("LCM_CAPTURE_ASYNC", "1")
+    monkeypatch.setattr(cc, "fcntl", None)
+    monkeypatch.setattr(cc.sys, "stdin", _fake_stdin({"session_id": "s4"}))
+    seen = {}
+    monkeypatch.setattr(cc, "_do_capture", lambda pl, final: (seen.update(ran=True), 0)[1])
+
+    def _no_fork(*a, **k):
+        raise AssertionError("forked despite no flock — would run unserialized")
+    monkeypatch.setattr(cc.subprocess, "Popen", _no_fork)
+    assert cc.main([]) == 0 and seen.get("ran")
+
+
+def test_worker_mode_logs_and_survives_capture_error(monkeypatch, tmp_path):
+    p = tmp_path / "payload.json"
+    p.write_text(json.dumps({"session_id": "s5"}))
+
+    def _boom(*a, **k):
+        raise RuntimeError("kaboom")
+    monkeypatch.setattr(cc, "_do_capture", _boom)
+    logs = []
+    monkeypatch.setattr(cc, "_log", lambda m: logs.append(m))
+    assert cc.main(["--worker", str(p)]) == 0          # never propagates
+    assert any("kaboom" in m for m in logs)            # logged instead of vanishing
+    assert not p.exists()                              # temp payload still cleaned up
+
+
 def test_parse_transcript_drops_injected_content(tmp_path):
     p = tmp_path / "t.jsonl"
     p.write_text("\n".join(json.dumps(o) for o in [

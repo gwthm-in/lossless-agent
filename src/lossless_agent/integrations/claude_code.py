@@ -392,10 +392,21 @@ def main(argv=None) -> int:
         try:
             with open(args.worker, encoding="utf-8") as f:
                 payload = json.load(f)
-        except Exception:
+        except Exception as e:
+            # Corrupt/missing payload: still clean up the temp file (its finally never runs here).
+            try:
+                os.unlink(args.worker)
+            except OSError:
+                pass
+            _log(f"async worker: unreadable payload ({e})")
             return 0
         try:
+            # The worker's stderr is /dev/null, so an escaping exception would vanish silently and
+            # capture would stop with no trace (and --final would be lost). Log it.
             return _do_capture(payload if isinstance(payload, dict) else {}, args.final)
+        except Exception as e:
+            _log(f"async worker capture failed: {e}")
+            return 0
         finally:
             try:
                 os.unlink(args.worker)
@@ -411,12 +422,18 @@ def main(argv=None) -> int:
 
     # Async mode: fork a detached worker and return in milliseconds so the hook never blocks
     # (summarization can take up to LCM_SUMMARY_TIMEOUT_MS). Fall back to inline if the fork fails.
+    # Only when flock is available: without it (non-POSIX) detaching would run workers concurrently
+    # with no serialization, reopening the very read-cursor→ingest→advance race async introduces —
+    # so there we deliberately stay inline (single invocation) to preserve correctness.
     if _async_enabled():
-        try:
-            _spawn_detached(payload, args.final)
-            return 0
-        except Exception as e:
-            _log(f"async spawn failed ({e}); running capture inline")
+        if fcntl is None:
+            _log("async capture requested but flock is unavailable (non-POSIX); running inline to stay serialized")
+        else:
+            try:
+                _spawn_detached(payload, args.final)
+                return 0
+            except Exception as e:
+                _log(f"async spawn failed ({e}); running capture inline")
 
     return _do_capture(payload, args.final)
 
