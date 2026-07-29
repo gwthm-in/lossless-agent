@@ -284,6 +284,7 @@ class BaseAdapter(AgentAdapter):
         await self._engine.run_incremental(
             conv.id, self._config.assembler.max_context_tokens
         )
+        await self._embed_new_summaries(conv.id)
 
     async def on_session_end(self, session_key: str) -> None:
         """Run final compaction passes until nothing remains."""
@@ -298,6 +299,27 @@ class BaseAdapter(AgentAdapter):
             if result is None:
                 break
             depth += 1
+        await self._embed_new_summaries(conv.id)
+
+    async def _embed_new_summaries(self, conv_id: int) -> None:
+        """Embed this conversation's not-yet-embedded summaries so summary-level semantic recall
+        works (previously summary_embeddings was always empty). Best-effort — never break the
+        lifecycle on an embedding failure."""
+        if self._raw_vector_store is None or self._raw_batch_embed_fn is None:
+            return
+        try:
+            present = self._raw_vector_store.summary_ids_present(conv_id)
+            pending = [
+                s for s in self._sum_store.get_by_conversation(conv_id)
+                if s.summary_id not in present and s.content and s.content.strip()
+            ]
+            if pending:
+                embeddings = await self._raw_batch_embed_fn([s.content for s in pending])
+                self._raw_vector_store.store_summaries_batch(
+                    [(s.summary_id, conv_id, emb) for s, emb in zip(pending, embeddings)]
+                )
+        except Exception:
+            logger.warning("Failed to embed summaries at compaction", exc_info=True)
 
     # ------------------------------------------------------------------
     # Tools (AgentAdapter ABC)
