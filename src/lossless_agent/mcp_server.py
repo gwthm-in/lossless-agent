@@ -855,6 +855,7 @@ async def main(db_path: str, db_dsn: str = "") -> None:
             _vector_store = None
             _raw_embed_fn = None
             _raw_batch_embed_fn = None
+            _summary_vector_ok = False
 
     try:
         async with stdio_server() as (read_stream, write_stream):

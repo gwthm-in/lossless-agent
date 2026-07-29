@@ -67,7 +67,8 @@ class VectorStore:
         try:
             cur.execute("SELECT to_regclass(%s)", (table,))
             if cur.fetchone()[0] is None:
-                return  # table not created yet — nothing to reconcile
+                self._conn.rollback()  # release the read txn; table not created yet
+                return
             cur.execute(
                 "SELECT atttypmod FROM pg_attribute "
                 "WHERE attrelid = %s::regclass AND attname = 'embedding'",
