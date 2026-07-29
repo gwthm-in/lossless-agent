@@ -57,6 +57,56 @@ class VectorStore:
             self._ensure_schema()
         return self._conn
 
+    def _reconcile_dim(self, table: str, want_dim: int) -> None:
+        """If *table* exists with an embedding column of a different vector width than
+        *want_dim*, recreate it when empty (so subsequent DDL builds it at the right
+        width) or warn and leave it alone when it holds rows. pgvector stores the
+        declared dimension directly in ``atttypmod``. *table* is an internal constant,
+        never user input — safe to interpolate."""
+        cur = self._conn.cursor()
+        try:
+            cur.execute("SELECT to_regclass(%s)", (table,))
+            if cur.fetchone()[0] is None:
+                self._conn.rollback()  # release the read txn; table not created yet
+                return
+            cur.execute(
+                "SELECT atttypmod FROM pg_attribute "
+                "WHERE attrelid = %s::regclass AND attname = 'embedding'",
+                (table,),
+            )
+            row = cur.fetchone()
+            have = row[0] if row else None
+            if have is None or have <= 0 or have == want_dim:
+                self._conn.rollback()  # release the read txn; nothing to change
+                return
+            # Serialize against a concurrent writer: take an exclusive lock (NOWAIT so we never
+            # block startup) and re-count emptiness inside the SAME transaction as the DROP, so a
+            # row committed between the count and the DROP can't be silently destroyed. If the
+            # lock can't be taken, the except-branch rolls back and we fall through to the
+            # non-destructive CREATE-IF-NOT-EXISTS path.
+            cur.execute(f"LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE NOWAIT")
+            cur.execute(f"SELECT count(*) FROM {table}")
+            n = int(cur.fetchone()[0])
+            if n == 0:
+                cur.execute(f"DROP TABLE {table} CASCADE")
+                self._conn.commit()
+                logger.warning(
+                    "Recreated %s: embedding dim %s -> %s (table was empty)",
+                    table, have, want_dim,
+                )
+            else:
+                self._conn.rollback()  # release the lock; never destroy populated data
+                logger.warning(
+                    "%s has embedding dim %s but this build expects %s and it holds %d "
+                    "rows — leaving it; new inserts will fail until migrated manually.",
+                    table, have, want_dim, n,
+                )
+        except Exception:
+            self._conn.rollback()
+            logger.debug("dim reconciliation skipped for %s", table, exc_info=True)
+        finally:
+            cur.close()
+
     def _ensure_schema(self) -> None:
         # Step 1: try to create the extension.
         # On managed Postgres (RDS, Supabase, etc.) this requires SUPERUSER;
@@ -78,6 +128,12 @@ class VectorStore:
             cur.close()
 
         # Step 2: create the table (requires the extension to be present).
+        # First reconcile the dimension: an earlier version (or another process
+        # constructed with a different embedder) may have created the table at a
+        # different vector width. CREATE TABLE IF NOT EXISTS won't alter it, so
+        # store_* would fail forever on a dim mismatch. Recreate if empty; warn
+        # (never destroy data) if it holds rows.
+        self._reconcile_dim("summary_embeddings", self._dim)
         cur = self._conn.cursor()
         try:
             cur.execute(
@@ -144,6 +200,7 @@ class VectorStore:
             cur.close()
 
         # Step 4: message_embeddings table for raw vector retrieval
+        self._reconcile_dim("message_embeddings", self._msg_dim)
         cur = self._conn.cursor()
         try:
             cur.execute(
@@ -240,6 +297,62 @@ class VectorStore:
         except Exception:
             conn.rollback()
             raise
+        finally:
+            cur.close()
+
+    def store_summaries_batch(
+        self,
+        items: List[tuple],
+    ) -> None:
+        """Batch upsert summary embeddings.
+
+        Args:
+            items: List of (summary_id, conversation_id, embedding) tuples.
+        """
+        if not items:
+            return
+        conn = self._get_conn()
+        cur = conn.cursor()
+        try:
+            for summary_id, conversation_id, embedding in items:
+                vec = self._vec_literal(embedding)
+                cur.execute(
+                    """
+                    INSERT INTO summary_embeddings (summary_id, conversation_id, embedding)
+                    VALUES (%s, %s, %s::vector)
+                    ON CONFLICT (summary_id) DO UPDATE
+                        SET embedding = EXCLUDED.embedding
+                    """,
+                    (summary_id, conversation_id, vec),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+    def summary_ids_present(
+        self,
+        conversation_id: Optional[int] = None,
+    ) -> set:
+        """Return the set of summary_ids already embedded.
+
+        Optionally restricted to a single conversation so callers can find
+        which summaries still need embedding.
+        """
+        conn = self._get_conn()
+        cur = conn.cursor()
+        try:
+            if conversation_id is not None:
+                cur.execute(
+                    "SELECT summary_id FROM summary_embeddings "
+                    "WHERE conversation_id = %s",
+                    (conversation_id,),
+                )
+            else:
+                cur.execute("SELECT summary_id FROM summary_embeddings")
+            return {row[0] for row in cur.fetchall()}
         finally:
             cur.close()
 
@@ -397,6 +510,59 @@ class VectorStore:
                 SELECT message_id,
                        1.0 - (embedding <=> %s::vector) AS similarity
                 FROM message_embeddings
+                {where_sql}
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+            """
+            cur.execute(sql, [vec] + params + [vec, top_k])
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+
+        return [(row[0], float(row[1])) for row in rows]
+
+    def search_summaries(
+        self,
+        query_embedding: List[float],
+        top_k: int = 20,
+        exclude_conversation_id: Optional[int] = None,
+        conversation_ids: Optional[List[int]] = None,
+        min_score: float = 0.35,
+    ) -> List[Tuple[str, float]]:
+        """Return (summary_id, cosine_similarity) for nearest-neighbour summaries.
+
+        Mirrors :meth:`search_messages` but over ``summary_embeddings`` — the reader
+        for summary-level semantic recall (lcm_grep scope=summaries/all). Same
+        min_score-in-query semantics so LIMIT applies after filtering.
+        """
+        conn = self._get_conn()
+        vec = self._vec_literal(query_embedding)
+        cur = conn.cursor()
+        try:
+            where_clauses = []
+            params: list = []
+
+            if exclude_conversation_id is not None:
+                where_clauses.append("conversation_id != %s")
+                params.append(exclude_conversation_id)
+
+            if conversation_ids is not None:
+                placeholders = ",".join(["%s"] * len(conversation_ids))
+                where_clauses.append(f"conversation_id IN ({placeholders})")
+                params.extend(conversation_ids)
+
+            if min_score > 0:
+                where_clauses.append("1.0 - (embedding <=> %s::vector) >= %s")
+                params.extend([vec, min_score])
+
+            where_sql = ""
+            if where_clauses:
+                where_sql = "WHERE " + " AND ".join(where_clauses)
+
+            sql = f"""
+                SELECT summary_id,
+                       1.0 - (embedding <=> %s::vector) AS similarity
+                FROM summary_embeddings
                 {where_sql}
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s

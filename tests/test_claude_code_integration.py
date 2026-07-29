@@ -112,3 +112,23 @@ def test_prepare_store_sqlite_bare_filename():
         resolved_db_path = "lcm.db"
 
     assert cc.prepare_store(_Cfg()) is True
+
+
+def test_parse_transcript_drops_injected_content(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text("\n".join(json.dumps(o) for o in [
+        {"type": "user", "message": {"role": "user", "content": "real question about foo.py"}},
+        # pure injected system-reminder -> dropped
+        {"type": "user", "message": {"role": "user", "content": "<system-reminder>ctx</system-reminder>"}},
+        # mixed block: task-notification stripped, real follow-up kept
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "<task-notification>bg event</task-notification>"},
+            {"type": "text", "text": "actual follow-up"}]}},
+        # summarizer-prompt echo -> dropped
+        {"type": "assistant", "message": {"role": "assistant",
+                                          "content": "Summarize the session transcript below into bullets"}},
+    ]) + "\n")
+    assert cc.parse_transcript(str(p)) == [
+        {"role": "user", "content": "real question about foo.py"},
+        {"role": "user", "content": "actual follow-up"},
+    ]
