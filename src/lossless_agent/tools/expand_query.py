@@ -1,15 +1,26 @@
 """Sub-agent expansion tool for navigating the DAG and answering questions."""
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+)
 
 from lossless_agent.engine.expansion_auth import ExpansionAuthManager
 from lossless_agent.engine.expansion_policy import (
     ExpansionPolicy,
     PolicyAction,
 )
+from lossless_agent.engine.fusion import reciprocal_rank_fusion
 from lossless_agent.store.database import Database
 from lossless_agent.store.message_store import MessageStore
 from lossless_agent.store.summary_store import SummaryStore
@@ -19,7 +30,16 @@ from lossless_agent.tools.recall import (
     lcm_describe,
     lcm_expand,
     DescribeResult,
+    _truncate,
 )
+
+if TYPE_CHECKING:
+    from lossless_agent.store.vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
+
+# Single-text async embedder: query -> embedding vector.
+RawEmbedFn = Callable[[str], Awaitable[List[float]]]
 
 # Common English stop-words dropped when extracting keywords from a
 # natural-language question.  Kept small and generic on purpose.
@@ -89,6 +109,10 @@ class ExpansionOrchestrator:
         config: Optional[ExpandQueryConfig] = None,
         auth_manager: Optional[ExpansionAuthManager] = None,
         policy: Optional[ExpansionPolicy] = None,
+        vector_store: Optional["VectorStore"] = None,
+        raw_embed_fn: Optional[RawEmbedFn] = None,
+        vector_top_k: int = 20,
+        vector_min_score: float = 0.35,
     ) -> None:
         self.db = db
         self.msg_store = msg_store
@@ -97,6 +121,13 @@ class ExpansionOrchestrator:
         self.config = config or ExpandQueryConfig()
         self.auth_manager = auth_manager
         self.policy = policy
+        # Optional raw-vector retriever. When both are set, expand_query
+        # fuses semantic message hits with the FTS/relaxed-grep hits so
+        # natural-language recall stops being FTS-only.
+        self.vector_store = vector_store
+        self.raw_embed_fn = raw_embed_fn
+        self.vector_top_k = vector_top_k
+        self.vector_min_score = vector_min_score
 
     async def expand_query(
         self, conversation_id: int, query: str, grant_id: Optional[str] = None,
@@ -176,6 +207,13 @@ class ExpansionOrchestrator:
             # authenticating the summarizer?") match nothing.  Retry with a
             # relaxed OR search over salient keywords before giving up.
             grep_results = self._relaxed_grep(conversation_id, query, limit=5)
+
+        # Fuse semantic (vector) message hits with the FTS/relaxed-grep hits.
+        # Best-effort: message embeddings are the strongest retriever, but a
+        # failure here must never break recall — we fall back to FTS-only.
+        grep_results = await self._augment_with_vector(
+            conversation_id, query, grep_results, limit=5,
+        )
 
         if not grep_results:
             # No matches - call expand_fn with empty context

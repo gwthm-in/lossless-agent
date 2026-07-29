@@ -243,6 +243,62 @@ class VectorStore:
         finally:
             cur.close()
 
+    def store_summaries_batch(
+        self,
+        items: List[tuple],
+    ) -> None:
+        """Batch upsert summary embeddings.
+
+        Args:
+            items: List of (summary_id, conversation_id, embedding) tuples.
+        """
+        if not items:
+            return
+        conn = self._get_conn()
+        cur = conn.cursor()
+        try:
+            for summary_id, conversation_id, embedding in items:
+                vec = self._vec_literal(embedding)
+                cur.execute(
+                    """
+                    INSERT INTO summary_embeddings (summary_id, conversation_id, embedding)
+                    VALUES (%s, %s, %s::vector)
+                    ON CONFLICT (summary_id) DO UPDATE
+                        SET embedding = EXCLUDED.embedding
+                    """,
+                    (summary_id, conversation_id, vec),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+    def summary_ids_present(
+        self,
+        conversation_id: Optional[int] = None,
+    ) -> set:
+        """Return the set of summary_ids already embedded.
+
+        Optionally restricted to a single conversation so callers can find
+        which summaries still need embedding.
+        """
+        conn = self._get_conn()
+        cur = conn.cursor()
+        try:
+            if conversation_id is not None:
+                cur.execute(
+                    "SELECT summary_id FROM summary_embeddings "
+                    "WHERE conversation_id = %s",
+                    (conversation_id,),
+                )
+            else:
+                cur.execute("SELECT summary_id FROM summary_embeddings")
+            return {row[0] for row in cur.fetchall()}
+        finally:
+            cur.close()
+
     def search(
         self,
         query_embedding: List[float],
