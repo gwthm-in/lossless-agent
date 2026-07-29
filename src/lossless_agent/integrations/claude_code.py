@@ -169,8 +169,29 @@ def prepare_store(config) -> bool:
         return False
 
 
+# Text blocks that are injected context / harness noise, not real conversation — filtered out of
+# capture so they don't pollute memory (they otherwise outrank real content in recall).
+_INJECTED_PREFIXES = (
+    "<system-reminder>", "<task-notification>", "<command-name>", "<command-message>",
+    "<command-args>", "<local-command-stdout>", "[Request interrupted",
+)
+_INJECTED_SUBSTRINGS = (
+    "Summarize the session transcript below",   # summarizer-prompt echo
+    "You are compacting a long AI-agent working session",
+    "You are merging several lower-level summaries",
+)
+
+
+def _is_injected(text: str) -> bool:
+    """True if a text block is harness-injected context rather than conversation."""
+    t = text.lstrip()
+    return t.startswith(_INJECTED_PREFIXES) or any(s in text for s in _INJECTED_SUBSTRINGS)
+
+
 def parse_transcript(path: str) -> list[dict]:
-    """Parse a Claude Code transcript JSONL into ``[{role, content}]`` (user/assistant text)."""
+    """Parse a Claude Code transcript JSONL into ``[{role, content}]`` (user/assistant text),
+    dropping harness-injected blocks (system-reminders, task-notifications, slash-command noise,
+    summarizer-prompt echoes) so they don't pollute memory."""
     out: list[dict] = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -191,14 +212,19 @@ def parse_transcript(path: str) -> list[dict]:
                 continue
             content = msg.get("content")
             if isinstance(content, str):
-                text = content
+                text = "" if _is_injected(content) else content
             elif isinstance(content, list):
-                parts = [
-                    b.get("text", "") if isinstance(b, dict) and b.get("type") == "text"
-                    else (b if isinstance(b, str) else "")
-                    for b in content
-                ]
-                text = "\n".join(p for p in parts if p)
+                parts = []
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        bt = b.get("text", "")
+                    elif isinstance(b, str):
+                        bt = b
+                    else:
+                        bt = ""
+                    if bt and not _is_injected(bt):
+                        parts.append(bt)
+                text = "\n".join(parts)
             else:
                 text = ""
             text = (text or "").strip()
