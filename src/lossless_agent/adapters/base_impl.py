@@ -98,9 +98,16 @@ class BaseAdapter(AgentAdapter):
         if config.raw_vector_enabled and config.database_dsn:
             try:
                 from lossless_agent.store.vector_store import VectorStore
+                # When no API embedder is configured, the raw (fastembed) path also owns
+                # summary embeddings, so the summary table must match the raw dim — otherwise
+                # store_summaries_batch inserts raw_vector_dim vectors into a table created at
+                # embedding_dim and Postgres rejects the dimension mismatch.
+                raw_summary_dim = (
+                    config.embedding_dim if self._vector_store is not None else config.raw_vector_dim
+                )
                 self._raw_vector_store = VectorStore(
                     config.database_dsn,
-                    dim=config.embedding_dim,
+                    dim=raw_summary_dim,
                     msg_dim=config.raw_vector_dim,
                 )
                 self._raw_batch_embed_fn = make_raw_vector_batch_embedder(config)
@@ -306,6 +313,10 @@ class BaseAdapter(AgentAdapter):
         works (previously summary_embeddings was always empty). Best-effort — never break the
         lifecycle on an embedding failure."""
         if self._raw_vector_store is None or self._raw_batch_embed_fn is None:
+            return
+        # When an API embedder is active it owns summary_embeddings (at embedding_dim); the raw
+        # fastembed path must not write mismatched-dim vectors into that table.
+        if self._vector_store is not None:
             return
         try:
             present = self._raw_vector_store.summary_ids_present(conv_id)
