@@ -370,9 +370,26 @@ def _do_capture(payload: dict, final: bool) -> int:
             except Exception:
                 pass
             _log(f"ingested {len(messages)} message(s) -> {label} (session {session_key[:8]})")
+            _emit_capture_metric(session_key, len(messages))
         if final:
             _log(f"final compaction sweep -> {label} (session {session_key[:8]})")
     return 0
+
+
+def _emit_capture_metric(session_key: str, ingested: int) -> None:
+    """Best-effort usage-metrics event for a successful capture. Dedup count isn't tracked at
+    this layer (the adapter's overlap-skip in ``on_turn_end`` doesn't report how many messages it
+    dropped), so it's reported as 0 rather than guessed."""
+    try:
+        from lossless_agent import metrics
+        metrics.emit(metrics.build_event(
+            kind="capture",
+            tool="capture",
+            session_id=session_key or "",
+            extra={"ingested": ingested, "deduped": 0},
+        ))
+    except Exception:
+        pass
 
 
 def main(argv=None) -> int:
