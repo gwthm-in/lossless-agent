@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import json
 import logging
+import time
 from dataclasses import asdict
 from typing import Any, List, Optional, cast
 
@@ -30,6 +31,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
 
+from lossless_agent import metrics
 from lossless_agent.store.factory import create_database
 from lossless_agent.config import LCMConfig
 from lossless_agent.store.conversation_store import ConversationStore
@@ -80,6 +82,37 @@ def _serialize(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_serialize(item) for item in obj]
     return obj
+
+
+# ------------------------------------------------------------------
+# Usage metrics — best-effort, never allowed to affect tool behavior
+# ------------------------------------------------------------------
+
+_RETRIEVAL_TOOLS = {"lcm_grep", "lcm_expand_query", "lcm_get_context", "lcm_expand", "lcm_describe"}
+_COMPACTION_TOOLS = {"lcm_compact", "lcm_session_end"}
+
+
+def _result_payload(result: list) -> dict:
+    """Best-effort parse of a handler's serialized TextContent payload, purely for metrics
+    (counts already computed by the handler, without re-deriving them or touching its return
+    value). Never raises — an unparsable payload just yields an empty dict."""
+    try:
+        return json.loads(result[0].text)
+    except Exception:
+        return {}
+
+
+def _safe_emit(kind: str, tool: str, start: float, session_id: str = "", **kw: Any) -> None:
+    """Build + emit one metrics event. Every failure mode (bad kwargs, filesystem, whatever) is
+    swallowed here so instrumentation can never affect a tool call's correctness or latency."""
+    try:
+        latency_ms = (time.monotonic() - start) * 1000
+        event = metrics.build_event(
+            kind=kind, tool=tool, session_id=session_id, latency_ms=latency_ms, **kw
+        )
+        metrics.emit(event)
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------
@@ -338,6 +371,37 @@ async def list_tools() -> list[types.Tool]:
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     assert _db is not None, "Database not initialized"
 
+    start = time.monotonic()
+    session_id = str(arguments.get("session_key") or "")
+
+    try:
+        result = await _dispatch_tool(name, arguments, start, session_id)
+    except Exception:
+        # Emit the error under the SAME kind the success path would, so per-kind error rates
+        # aren't skewed (compact/session_end failures must stay 'compaction', not 'capture').
+        if name in _RETRIEVAL_TOOLS:
+            err_kind = "retrieval"
+        elif name in _COMPACTION_TOOLS:
+            err_kind = "compaction"
+        else:
+            err_kind = "capture"
+        _safe_emit(
+            err_kind,
+            name,
+            start,
+            session_id,
+            query=arguments.get("query"),
+            extra={"error": True},
+        )
+        raise
+    return result
+
+
+async def _dispatch_tool(
+    name: str, arguments: dict, start: float, session_id: str
+) -> list[types.TextContent]:
+    """The actual tool dispatch, factored out of ``call_tool`` so the outer function can wrap it
+    in a single try/except for error-path metrics without duplicating the whole if/elif chain."""
     if name == "lcm_grep":
         query = arguments["query"]
         scope = arguments.get("scope", "all")
@@ -352,6 +416,9 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             conversation_id=conversation_id,
             limit=limit,
         )
+        fts_hit_count = len(fts_results)
+        vec_hit_count = 0
+        summary_hit_count = 0
 
         # Raw-vector query embedding — computed once, shared by message + summary search
         # (avoids embedding the query twice on scope="all").
@@ -373,6 +440,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                     conversation_ids=conv_ids,
                     min_score=_config.raw_vector_min_score if _config else 0.35,
                 )
+                vec_hit_count = len(vec_hits)
 
                 if vec_hits:
                     flat_fts = cast(List[GrepResult], fts_results)
@@ -434,6 +502,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                     conversation_ids=conv_ids,
                     min_score=_config.raw_vector_min_score if _config else 0.35,
                 )
+                summary_hit_count = len(sum_hits)
                 if sum_hits:
                     flat = cast(List[GrepResult], fts_results)
                     existing_sum = {str(r.id) for r in flat if r.type == "summary"}
@@ -462,21 +531,42 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                 logger.warning("Summary vector search failed: %s", exc)
 
         payload = [_serialize(r) for r in fts_results]  # type: ignore[union-attr]
+        _safe_emit(
+            "retrieval", "lcm_grep", start, session_id,
+            query=query,
+            result_count=len(payload),
+            hits={"fts": fts_hit_count, "vector": vec_hit_count, "summary": summary_hit_count},
+            returned_ids=[str(r.id) for r in fts_results],  # type: ignore[union-attr]
+        )
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
     elif name == "lcm_describe":
-        result = lcm_describe(_db, summary_id=arguments["summary_id"])
+        summary_id = arguments["summary_id"]
+        result = lcm_describe(_db, summary_id=summary_id)
         if result is None:
+            _safe_emit("retrieval", "lcm_describe", start, session_id, target_id=summary_id, result_count=0)
             return [types.TextContent(type="text", text=json.dumps({"error": "summary not found"}))]
+        _safe_emit(
+            "retrieval", "lcm_describe", start, session_id,
+            target_id=summary_id, result_count=1, returned_ids=[summary_id],
+        )
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
 
     elif name == "lcm_expand":
-        result = lcm_expand(_db, summary_id=arguments["summary_id"], is_sub_agent=True) # type: ignore[assignment]
+        summary_id = arguments["summary_id"]
+        result = lcm_expand(_db, summary_id=summary_id, is_sub_agent=True) # type: ignore[assignment]
         if result is None:
+            _safe_emit("retrieval", "lcm_expand", start, session_id, target_id=summary_id, result_count=0)
             return [types.TextContent(type="text", text=json.dumps({"error": "summary not found"}))]
+        children = getattr(result, "children", None) or []
+        _safe_emit(
+            "retrieval", "lcm_expand", start, session_id,
+            target_id=summary_id, result_count=len(children),
+        )
         return [types.TextContent(type="text", text=json.dumps(_serialize(result), indent=2))]
 
     elif name == "lcm_expand_query":
+        query = arguments["query"]
         msg_store = MessageStore(_db)
         sum_store = SummaryStore(_db)
         orch = ExpansionOrchestrator(
@@ -487,9 +577,14 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         )
         result = await orch.expand_query( # type: ignore[assignment]
             conversation_id=arguments["conversation_id"],
-            query=arguments["query"],
+            query=query,
         )
+        cited = getattr(result, "cited_summaries", None) or []
         payload = _serialize(result)
+        _safe_emit(
+            "retrieval", "lcm_expand_query", start, session_id,
+            query=query, result_count=len(cited), returned_ids=cited,
+        )
         return [types.TextContent(type="text", text=json.dumps(payload, indent=2))]
 
     elif name == "lcm_stats":
@@ -524,26 +619,64 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             "by_depth_kind": summary_breakdown,
         }
 
+        _safe_emit("capture", "lcm_stats", start, session_id)
         return [types.TextContent(type="text", text=json.dumps(stats, indent=2))]
 
     # ── Write tools ──
 
     elif name == "lcm_ingest":
-        return await _handle_ingest(arguments)
+        result = await _handle_ingest(arguments)
+        payload = _result_payload(result)
+        _safe_emit(
+            "capture", "lcm_ingest", start, session_id,
+            extra={"ingested": payload.get("messages_ingested", 0), "deduped": 0},
+        )
+        return result
 
     elif name == "lcm_compact":
-        return await _handle_compact(arguments)
+        result = await _handle_compact(arguments)
+        payload = _result_payload(result)
+        _safe_emit(
+            "compaction", "lcm_compact", start, session_id,
+            extra={
+                "leaves": 0, "condensed": payload.get("summaries_created", 0),
+                "src_tokens": 0, "sum_tokens": 0,
+            },
+        )
+        return result
 
     elif name == "lcm_get_context":
-        return await _handle_get_context(arguments)
+        result = await _handle_get_context(arguments)
+        payload = _result_payload(result)
+        _safe_emit(
+            "retrieval", "lcm_get_context", start, session_id,
+            result_count=payload.get("summary_count", 0) + payload.get("message_count", 0),
+        )
+        return result
 
     elif name == "lcm_session_end":
-        return await _handle_session_end(arguments)
+        result = await _handle_session_end(arguments)
+        payload = _result_payload(result)
+        _safe_emit(
+            "compaction", "lcm_session_end", start, session_id,
+            extra={
+                "leaves": 0, "condensed": payload.get("summaries_created", 0),
+                "src_tokens": 0, "sum_tokens": 0,
+            },
+        )
+        return result
 
     elif name == "lcm_backfill":
-        return await _handle_backfill(arguments)
+        result = await _handle_backfill(arguments)
+        payload = _result_payload(result)
+        _safe_emit(
+            "capture", "lcm_backfill", start, session_id,
+            extra={"ingested": payload.get("embedded", 0), "deduped": payload.get("skipped", 0)},
+        )
+        return result
 
     else:
+        _safe_emit("capture", name, start, session_id, extra={"error": True})
         return [types.TextContent(type="text", text=json.dumps({"error": f"unknown tool: {name}"}))]
 
 
