@@ -89,6 +89,7 @@ def _serialize(obj: Any) -> Any:
 # ------------------------------------------------------------------
 
 _RETRIEVAL_TOOLS = {"lcm_grep", "lcm_expand_query", "lcm_get_context", "lcm_expand", "lcm_describe"}
+_COMPACTION_TOOLS = {"lcm_compact", "lcm_session_end"}
 
 
 def _result_payload(result: list) -> dict:
@@ -376,8 +377,16 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     try:
         result = await _dispatch_tool(name, arguments, start, session_id)
     except Exception:
+        # Emit the error under the SAME kind the success path would, so per-kind error rates
+        # aren't skewed (compact/session_end failures must stay 'compaction', not 'capture').
+        if name in _RETRIEVAL_TOOLS:
+            err_kind = "retrieval"
+        elif name in _COMPACTION_TOOLS:
+            err_kind = "compaction"
+        else:
+            err_kind = "capture"
         _safe_emit(
-            "retrieval" if name in _RETRIEVAL_TOOLS else "capture",
+            err_kind,
             name,
             start,
             session_id,

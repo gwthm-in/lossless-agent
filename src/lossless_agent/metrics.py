@@ -119,7 +119,9 @@ def build_event(
         "extra": extra or {},
     }
     if kind == "retrieval":
-        event["zero_result"] = (event["result_count"] == 0)
+        # A failed query is neither a hit nor a zero-result — don't let errors inflate the
+        # zero-result rate (the headline metric). Only a *successful* empty query is zero-result.
+        event["zero_result"] = (event["result_count"] == 0) and not (extra or {}).get("error")
         event["hits"] = hits or {"fts": 0, "vector": 0, "summary": 0}
         event["returned_ids"] = [str(i) for i in (returned_ids or [])][:10]
     return event

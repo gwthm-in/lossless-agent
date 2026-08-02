@@ -267,3 +267,14 @@ class TestDispatchLevelMetrics:
         assert len(events) == 1
         assert events[0]["tool"] == "totally_unknown_tool"
         assert events[0]["extra"] == {"error": True}
+
+
+def test_error_retrieval_event_is_not_a_zero_result():
+    """A failed query must not inflate the zero-result rate — only a successful empty query does."""
+    from lossless_agent import metrics
+    err = metrics.build_event(kind="retrieval", tool="lcm_grep", session_id="s",
+                              latency_ms=1, result_count=0, extra={"error": True})
+    assert err["zero_result"] is False
+    empty = metrics.build_event(kind="retrieval", tool="lcm_grep", session_id="s",
+                                latency_ms=1, result_count=0)
+    assert empty["zero_result"] is True
